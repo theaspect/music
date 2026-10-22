@@ -56,6 +56,18 @@
     if (ctx.state === "suspended") ctx.resume();
     return ctx;
   }
+  // iOS plays Web Audio through the "ambient" session, which the silent switch mutes; Safari 16.4+ lets a page ask
+  // for "playback". Touch pointerdown does not count as a user gesture in WebKit (pointerup/touchend do), so the
+  // context is also started on the first of those anywhere on the page.
+  if (navigator.audioSession) { try { navigator.audioSession.type = "playback"; } catch (e) { /* older Safari */ } }
+  const unlock = () => {
+    audio();
+    const s = ctx.createBufferSource();
+    s.buffer = ctx.createBuffer(1, 1, ctx.sampleRate);
+    s.connect(ctx.destination); s.start();
+    ["pointerup", "touchend", "keydown"].forEach((e) => document.removeEventListener(e, unlock, true));
+  };
+  ["pointerup", "touchend", "keydown"].forEach((e) => document.addEventListener(e, unlock, true));
 
   function envGain(t, peak, decay) {
     const g = ctx.createGain();
@@ -146,14 +158,14 @@
   }
   // Press-and-hold on a canvas: `begin(x, y)` returns a stop function, or nothing when the press hits nothing.
   function holdable(canvas, begin) {
-    let stop = null;
+    const stops = new Map(); // pointerId → stop: each finger holds its own note
     canvas.addEventListener("pointerdown", (ev) => {
       const box = canvas.getBoundingClientRect();
       audio();
-      stop = begin(ev.clientX - box.left, ev.clientY - box.top) || null;
-      if (stop) { ev.preventDefault(); canvas.setPointerCapture(ev.pointerId); }
+      const stop = begin(ev.clientX - box.left, ev.clientY - box.top);
+      if (stop) { ev.preventDefault(); stops.set(ev.pointerId, stop); canvas.setPointerCapture(ev.pointerId); }
     });
-    const end = () => { if (stop) { stop(); stop = null; } };
+    const end = (ev) => { const stop = stops.get(ev.pointerId); if (stop) { stops.delete(ev.pointerId); stop(); } };
     ["pointerup", "pointercancel", "lostpointercapture"].forEach((e) => canvas.addEventListener(e, end));
   }
   function howto(el, text) {
@@ -165,13 +177,13 @@
 
   // Press-and-hold on a button: `start()` returns a stop function.
   function holdButton(btn, start) {
-    let stop = null;
+    const stops = new Map();
     btn.addEventListener("pointerdown", (ev) => {
       audio();
-      stop = start() || null;
-      if (stop) btn.setPointerCapture(ev.pointerId);
+      const stop = start();
+      if (stop) { ev.preventDefault(); stops.set(ev.pointerId, stop); btn.setPointerCapture(ev.pointerId); }
     });
-    const end = () => { if (stop) { stop(); stop = null; } };
+    const end = (ev) => { const stop = stops.get(ev.pointerId); if (stop) { stops.delete(ev.pointerId); stop(); } };
     ["pointerup", "pointercancel", "lostpointercapture"].forEach((e) => btn.addEventListener(e, end));
   }
   function release(g, nodes, fade) {
@@ -310,7 +322,8 @@
       this.el.append(this.canvas, bar);
       this.flashes = {};
       this.canvas.addEventListener("pointerdown", (ev) => this.tap(ev));
-      const endTap = () => { if (this.stopTap) { this.stopTap(); this.stopTap = null; } };
+      this.stopTaps = new Map(); // pointerId → stop, for chords played with several fingers
+      const endTap = (ev) => { const stop = this.stopTaps.get(ev.pointerId); if (stop) { this.stopTaps.delete(ev.pointerId); stop(); } };
       ["pointerup", "pointercancel", "lostpointercapture"].forEach((e) => this.canvas.addEventListener(e, endTap));
       this.button = bar.querySelector(".player-play");
       const range = bar.querySelector("input[type=range]");
@@ -554,8 +567,8 @@
       const target = (this.targets || []).find((tg) => tg.inside(x, y));
       if (!target) return;
       ev.preventDefault();
-      this.stopTap = this.hit(target.key);
-      if (this.stopTap) this.canvas.setPointerCapture(ev.pointerId);
+      const stop = this.hit(target.key);
+      if (stop) { this.stopTaps.set(ev.pointerId, stop); this.canvas.setPointerCapture(ev.pointerId); }
     }
 
     // One hit from any input: sound, flash, and in Play mode a verdict against the nearest expected note.
@@ -811,29 +824,39 @@
 
 
   // ---------- ruler experiment (1.1.1) ----------
-  // A plastic ruler ~2 mm thick, clamped at the table edge: a cantilever, whose first mode is
-  // f = 1.875² / (2π) · √(E·h² / (12·ρ)) / L² ≈ 0.51 / L² (L in metres; E = 3 GPa, ρ = 1190 kg/m³).
-  const RULER_K = 0.513;
+  // A ruler clamped at the table edge is a cantilever, whose first mode is
+  // f = 1.875² / (2π) · √(E·h² / (12·ρ)) / L² = K / L² (L in metres). Typical values, not measurements:
+  //   plastic (acrylic) h = 2 mm, E = 3 GPa, ρ = 1190 kg/m³  → K ≈ 0.51
+  //   wood along the grain h ≈ 3 mm, E ≈ 10 GPa, ρ ≈ 650 kg/m³ → K ≈ 1.90
+  //   steel strip of a GOST 427 measuring ruler h = 0.5 mm (0.4–0.6), E = 200 GPa, ρ = 7850 kg/m³ → K ≈ 0.41
+  // Damping (seconds for the swing to fade) and timbre differ too: steel rings on, wood dies at once.
+  const RULER_MATERIALS = {
+    plastic: { name: "Пластик, 2 мм", K: 0.513, tauLow: 1.4, tauHigh: 0.5, ring: 1.2, bright: 6, color: "#2f72c9" },
+    wood: { name: "Дерево, 3 мм", K: 1.90, tauLow: 0.5, tauHigh: 0.25, ring: 0.45, bright: 3, color: "#b07a3c" },
+    steel: { name: "Сталь, 0,5 мм (ГОСТ 427)", K: 0.408, tauLow: 3, tauHigh: 1.6, ring: 2.6, bright: 12, color: "#7d8793" },
+  };
   // The second bending mode of a cantilever is (4.694 / 1.875)² ≈ 6.27 times the first: this is the hum one hears
   // from a long ruler, pulsing with the slow swing, together with the slap against the table edge on every swing.
   const SECOND_MODE = 6.27;
   const RULER_CM = 30;
 
   // What one hears from a ruler: its swing once that is audible (from 20 Hz), otherwise the hum of the second mode.
-  const rulerFreq = (cm) => RULER_K / (cm / 100) ** 2;
-  const rulerHeard = (cm) => (rulerFreq(cm) >= 20 ? rulerFreq(cm) : rulerFreq(cm) * SECOND_MODE);
-  // Free lengths (3–28 cm) at which the heard pitch is exactly a white note.
-  const RULER_NOTES = (() => {
+  const rulerFreq = (cm, K) => K / (cm / 100) ** 2;
+  const rulerHeard = (cm, K) => (rulerFreq(cm, K) >= 20 ? rulerFreq(cm, K) : rulerFreq(cm, K) * SECOND_MODE);
+  // Free lengths (3–28 cm) at which the heard pitch is exactly a white note, per material.
+  const rulerNotesCache = {};
+  function rulerNotes(K) {
+    if (rulerNotesCache[K]) return rulerNotesCache[K];
     const out = [];
     for (let m = 12; m <= 108; m++) {
       if (isBlack(m)) continue;
       const f = midiFreq(m);
-      const swing = Math.sqrt(RULER_K / f) * 100, hum = Math.sqrt((RULER_K * SECOND_MODE) / f) * 100;
-      if (swing >= 3 && rulerFreq(swing) >= 20) out.push({ cm: swing, m });
-      if (hum <= 28 && rulerFreq(hum) < 20) out.push({ cm: hum, m });
+      const swing = Math.sqrt(K / f) * 100, hum = Math.sqrt((K * SECOND_MODE) / f) * 100;
+      if (swing >= 3 && swing <= 28 && rulerFreq(swing, K) >= 20) out.push({ cm: swing, m });
+      if (hum >= 3 && hum <= 28 && rulerFreq(hum, K) < 20) out.push({ cm: hum, m });
     }
-    return out;
-  })();
+    return (rulerNotesCache[K] = out);
+  }
   const cmText = (cm) => (Math.round(cm * 10) / 10).toString().replace(".", ",");
 
   class RulerLab {
@@ -841,16 +864,26 @@
       this.el = el;
       howto(el, "Как играть: тяните линейку вправо или влево — меняется свисающий конец. Щёлкните по линейке — она задрожит.");
       this.free = 20; // cm hanging over the edge
+      this.mat = RULER_MATERIALS.plastic;
       this.pluckedAt = null;
       this.canvas = document.createElement("canvas");
+      this.canvas.style.touchAction = "pan-y";
       this.g = this.canvas.getContext("2d");
       const bar = document.createElement("div");
       bar.className = "player-controls";
       bar.innerHTML =
         '<button type="button" class="player-play">Щёлкнуть</button>' +
+        '<span class="player-mode">' + Object.entries(RULER_MATERIALS).map(([k, m], i) =>
+          `<button type="button" data-mat="${k}"${i === 0 ? ' class="on"' : ""}>${m.name}</button>`).join("") + "</span>" +
         '<span class="player-score lab-info"></span>';
       el.append(this.canvas, bar);
       this.info = bar.querySelector(".lab-info");
+      bar.querySelectorAll("[data-mat]").forEach((b) => b.addEventListener("click", () => {
+        bar.querySelectorAll("[data-mat]").forEach((x) => x.classList.toggle("on", x === b));
+        this.mat = RULER_MATERIALS[b.dataset.mat];
+        this.pluckedAt = null;
+        this.update();
+      }));
       bar.querySelector("button").addEventListener("click", () => this.pluck());
       // Drag the ruler sideways to push it out over the edge or back onto the table; a short click flicks it.
       let press = null;
@@ -865,8 +898,9 @@
         if (!press.moved && Math.abs(dx) > 4) press.moved = true;
         if (!press.moved) return;
         let free = Math.max(3, Math.min(28, press.free + dx / this.cm));
-        const near = RULER_NOTES.reduce((a, b) => (Math.abs(b.cm - free) < Math.abs(a.cm - free) ? b : a));
-        free = Math.abs(near.cm - free) < 0.3 ? near.cm : Math.round(free * 10) / 10; // snap to a note within 3 mm
+        const notes = rulerNotes(this.mat.K);
+        const near = notes.length ? notes.reduce((a, b) => (Math.abs(b.cm - free) < Math.abs(a.cm - free) ? b : a)) : null;
+        free = near && Math.abs(near.cm - free) < 0.3 ? near.cm : Math.round(free * 10) / 10; // snap to a note within 3 mm
         if (free !== this.free) { this.free = free; this.pluckedAt = null; this.update(); }
       });
       const end = () => { if (press && !press.moved) this.pluck(); press = null; };
@@ -875,7 +909,7 @@
       window.addEventListener("resize", () => this.resize());
     }
 
-    freq() { return RULER_K / (this.free / 100) ** 2; }
+    freq() { return rulerFreq(this.free, this.mat.K); }
 
     resize() {
       const w = this.el.clientWidth, sceneH = Math.round(Math.min(260, w * 0.45)), h = sceneH + 140;
@@ -902,7 +936,8 @@
     update() {
       const f = this.freq();
       const f2 = Math.round(f * SECOND_MODE);
-      this.info.textContent = `слышно ${nearestNote(rulerHeard(this.free))} (${hz(rulerHeard(this.free))} Гц). ` +
+      const heard = rulerHeard(this.free, this.mat.K);
+      this.info.textContent = `слышно ${nearestNote(heard)} (${hz(heard)} Гц). ` +
         `≈ ${f < 20 ? f.toFixed(1).replace(".", ",") : Math.round(f)} колебаний в секунду — ` +
         (f < 20 ? `само качание не слышно (ниже 20), слышны стук о стол и гул второго изгиба ≈ ${f2} Гц`
                 : `глазом не уследить, ухо слышит гудение; второй изгиб ≈ ${f2} Гц`);
@@ -916,7 +951,7 @@
       hiss(t, 0.03, 0.3, "bandpass", 2500); // the flick of a finger
       if (f < 20) {
         // the slow swing itself is inaudible: what sounds is a slap on every swing and the pulsing second mode
-        const tau = 1.4, len = 3;
+        const tau = this.mat.tauLow, len = Math.min(5, tau * 2.2);
         for (let k = 1; k / f < len; k++) {
           const level = Math.exp(-k / f / tau);
           if (level < 0.05) break;
@@ -941,11 +976,11 @@
         o.frequency.value = f;
         const filter = ctx.createBiquadFilter();
         filter.type = "lowpass";
-        filter.frequency.value = Math.min(4000, f * 6);
+        filter.frequency.value = Math.min(8000, f * this.mat.bright);
         o.connect(filter);
-        filter.connect(envGain(t, 0.35, 1.2));
+        filter.connect(envGain(t, 0.35, this.mat.ring));
         o.start(t);
-        o.stop(t + 1.3);
+        o.stop(t + this.mat.ring + 0.1);
       }
       this.pluckedAt = performance.now();
       const frame = () => {
@@ -975,11 +1010,12 @@
       g.fillText("рука прижимает", Math.max(4, edge - 7 * cm) + 2.5 * cm, y0 - 24);
 
       const f = this.freq();
-      const amp = this.pluckedAt ? Math.exp(-age / (f < 20 ? 1.4 : 0.5)) * Math.min(h * 0.32, freeLen * 0.5) : 0;
+      const amp = this.pluckedAt ? Math.exp(-age / (f < 20 ? this.mat.tauLow : this.mat.tauHigh)) * Math.min(h * 0.32, freeLen * 0.5) : 0;
       const shape = (x) => { const s = x / freeLen; return (s * s * (3 - s)) / 2; }; // bent cantilever
       const ruler = (tip, alpha) => {
         g.globalAlpha = alpha;
-        g.strokeStyle = COLORS.right; g.lineWidth = 7; g.lineCap = "butt";
+        g.strokeStyle = this.mat.color; g.lineWidth = this.mat === RULER_MATERIALS.steel ? 4 : this.mat === RULER_MATERIALS.wood ? 9 : 7;
+        g.lineCap = "butt";
         g.beginPath(); g.moveTo(Math.max(0, clamp), y0); g.lineTo(edge, y0);
         for (let x = 0; x <= freeLen; x += 4) g.lineTo(edge + x, y0 + tip * shape(x));
         g.stroke();
@@ -997,7 +1033,7 @@
       g.beginPath(); g.moveTo(edge, h - 22); g.lineTo(edge + freeLen, h - 22); g.stroke();
       g.fillStyle = COLORS.text; g.font = "bold 12px Segoe UI, Arial, sans-serif";
       // white-note lengths as ticks on the length scale; only до is labelled, the rest would crowd at short lengths
-      RULER_NOTES.forEach(({ cm: L, m }) => {
+      rulerNotes(this.mat.K).forEach(({ cm: L, m }) => {
         const x = edge + L * cm;
         g.strokeStyle = m % 12 === 0 ? COLORS.right : "#b8b8ae"; g.lineWidth = m % 12 === 0 ? 2 : 1;
         g.beginPath(); g.moveTo(x, h - 28); g.lineTo(x, h - 16); g.stroke();
@@ -1007,7 +1043,7 @@
         }
       });
       g.fillStyle = COLORS.text; g.font = "bold 12px Segoe UI, Arial, sans-serif"; g.textAlign = "center";
-      const note = nearestNote(rulerHeard(this.free));
+      const note = nearestNote(rulerHeard(this.free, this.mat.K));
       g.fillText(`${cmText(this.free)} см свободно — ${note}`, edge + freeLen / 2, h - 2);
       if (!this.pluckedAt || age > 2) arrows(g, edge + freeLen - 10, y0 - 30, "тяните");
     }
@@ -1029,7 +1065,7 @@
         g.fillStyle = "#f6f6f2"; g.strokeStyle = COLORS.line; g.fillRect(x0, y - 14, 10, 28); g.strokeRect(x0, y - 14, 10, 28);
         const shapeAt = (s) => cantilever(n, s) / cantilever(n, 1);
         const line = (k, alpha, width) => {
-          g.globalAlpha = alpha; g.strokeStyle = COLORS.right; g.lineWidth = width;
+          g.globalAlpha = alpha; g.strokeStyle = this.mat.color; g.lineWidth = width;
           g.beginPath();
           for (let s = 0; s <= 1.0001; s += 0.02) g.lineTo(x0 + 10 + s * len, y - 26 * k * shapeAt(s));
           g.stroke(); g.globalAlpha = 1;
@@ -1621,6 +1657,7 @@
       this.tension = 1;
       this.pluckedAt = null;
       this.canvas = document.createElement("canvas");
+      this.canvas.style.touchAction = "pan-y";
       this.g = this.canvas.getContext("2d");
       const bar = document.createElement("div");
       bar.className = "player-controls";
@@ -1795,6 +1832,7 @@
       this.mode = "tap";
       this.lit = null;
       this.canvas = document.createElement("canvas");
+      this.canvas.style.touchAction = "none";
       this.g = this.canvas.getContext("2d");
       const bar = document.createElement("div");
       bar.className = "player-controls";

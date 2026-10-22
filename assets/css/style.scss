@@ -92,7 +92,18 @@ table img {
 .lab canvas,
 .player canvas {
   cursor: pointer;
-  touch-action: none;
+  touch-action: manipulation; // taps only: no double-tap zoom, page still scrolls; drag labs override in JS
+}
+// Long presses play sounds here, so iPad must not select text or pop up the callout and magnifier.
+.lab,
+.player {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+.lab button,
+.player button {
+  touch-action: manipulation;
 }
 
 // Paper gets the static diagrams and tables that sit next to every player; interactive parts and their hints are dropped.

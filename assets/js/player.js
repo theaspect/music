@@ -1420,9 +1420,22 @@
   }
 
   // ---------- bow string (1.1.1): press with a finger, pluck the sounding part ----------
-  const STRING_BASE = 110; // an open string tuned to ля of the big octave, for the sake of the example
-  const STRING_MARKS = [[1, "вся струна", "исходный звук"], [3 / 4, "три четверти", "кварта выше"],
-                        [2 / 3, "две трети", "квинта выше"], [1 / 2, "половина", "октава выше"]];
+  // The open string is tuned to до of the small octave; the scale comes from simple length ratios (just intonation).
+  const STRING_BASE = 130.81;
+  const STRING_MARKS = [
+    [1, "до", "вся струна — исходный звук"],
+    [15 / 16, "до♯", "15/16 струны — малая секунда выше"],
+    [8 / 9, "ре", "8/9 струны — большая секунда выше"],
+    [5 / 6, "ре♯", "5/6 струны — малая терция выше"],
+    [4 / 5, "ми", "4/5 струны — большая терция выше"],
+    [3 / 4, "фа", "3/4 струны — кварта выше"],
+    [32 / 45, "фа♯", "32/45 струны — тритон выше"],
+    [2 / 3, "соль", "2/3 струны — квинта выше"],
+    [5 / 8, "соль♯", "5/8 струны — малая секста выше"],
+    [3 / 5, "ля", "3/5 струны — большая секста выше"],
+    [5 / 9, "ля♯", "5/9 струны — малая септима выше"],
+    [8 / 15, "си", "8/15 струны — большая септима выше"],
+    [1 / 2, "до", "половина струны — октава выше"]];
   class StringLab {
     constructor(el) {
       this.el = el;
@@ -1447,7 +1460,7 @@
       const posAt = (ev) => (ev.clientX - this.canvas.getBoundingClientRect().left - this.x0) / this.len;
       const setFinger = (pos) => {
         let part = Math.max(0.2, Math.min(1, 1 - pos));
-        const snap = STRING_MARKS.find(([share]) => Math.abs(share - part) < 0.015);
+        const snap = STRING_MARKS.find(([share]) => Math.abs(share - part) < 0.008);
         if (snap) part = snap[0];
         this.part = part;
         this.update();
@@ -1490,8 +1503,8 @@
       const f = this.freq();
       const mark = STRING_MARKS.find(([share]) => Math.abs(share - this.part) < 0.005);
       const semis = 12 * Math.log2(1 / this.part);
-      this.info.textContent = `звучит ${mark ? mark[1] : Math.round(this.part * 100) + " % струны"} — ${Math.round(f)} Гц, ` +
-        (mark ? mark[2] : `на ${semis.toFixed(1).replace(".", ",")} полутона выше`) +
+      this.info.textContent = (mark ? `${mark[1]}: ${mark[2]}` : `${Math.round(this.part * 100)} % струны — на ${semis.toFixed(1).replace(".", ",")} полутона выше`) +
+        `, ${Math.round(f)} Гц` +
         (this.tension !== 1 ? `; натяжение ×${this.tension.toFixed(2).replace(".", ",")} поднимает звук в √${this.tension.toFixed(2).replace(".", ",")} раза` : "");
       this.draw(0);
     }
@@ -1512,13 +1525,14 @@
       g.fillStyle = COLORS.bg; g.fillRect(0, 0, this.w, this.h);
       const fx = x0 + len * (1 - this.part);
       // marks for the simple ratios
-      STRING_MARKS.slice(1).forEach(([share, name], i) => {
+      STRING_MARKS.forEach(([share, name]) => {
         const x = x0 + len * (1 - share);
-        const labelY = i % 2 ? y0 - 40 : y0 + 44; // alternate above and below: 3/4 and 2/3 sit close together
+        const sharp = name.includes("♯"); // sharps above the string, like black keys; the rest below
+        const labelY = sharp ? y0 - 40 : y0 + 44;
         g.strokeStyle = "#d8d8cf"; g.lineWidth = 1; g.setLineDash([3, 3]);
         g.beginPath(); g.moveTo(x, y0 - 34); g.lineTo(x, y0 + 30); g.stroke(); g.setLineDash([]);
-        g.fillStyle = COLORS.muted; g.font = "10px Segoe UI, Arial, sans-serif"; g.textAlign = "center";
-        g.fillText(name, x, labelY);
+        g.fillStyle = sharp ? COLORS.muted : COLORS.text; g.font = `${sharp ? "" : "bold "}${sharp ? 10 : 12}px Segoe UI, Arial, sans-serif`; g.textAlign = "center";
+        g.fillText(name, x + (share === 1 ? 10 : 0), labelY);
       });
       // pegs, the silent part and the vibrating part
       g.fillStyle = "#555"; g.fillRect(x0 - 8, y0 - 12, 8, 24); g.fillRect(x0 + len, y0 - 12, 8, 24);

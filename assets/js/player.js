@@ -969,26 +969,37 @@
   }
 
 
-  // ---------- octave chain (1.3) ----------
-  const OCTAVES = [["контроктава", 55, "A1"], ["большая", 110, "A2"], ["малая", 220, "A3"], ["первая", 440, "A4"],
-                   ["вторая", 880, "A5"], ["третья", 1760, "A6"], ["четвёртая", 3520, "A7"]];
+  // ---------- octaves (1.3): the 12 notes of one octave; switching the octave doubles or halves every frequency ----------
+  const OCTAVES = [["контроктава", "контроктавы", 1], ["большая", "большой октавы", 2], ["малая", "малой октавы", 3],
+                   ["первая", "первой октавы", 4], ["вторая", "второй октавы", 5], ["третья", "третьей октавы", 6],
+                   ["четвёртая", "четвёртой октавы", 7]];
+  const hz = (f) => (f < 100 ? f.toFixed(1).replace(".", ",") : String(Math.round(f)));
 
   class OctaveLab {
     constructor(el) {
       this.el = el;
-      howto(el, "Как играть: нажмите и держите октаву — звучит её «ля», а сверху видна волна.");
-      this.freq = 440;
-      this.text = "ля первой октавы — 440 колебаний в секунду";
+      howto(el, "Как играть: выберите октаву кнопками сверху, затем нажмите и держите клавишу — звучит нота, а над клавиатурой видна её волна.");
+      this.oct = 3; // index in OCTAVES: the first octave
+      this.pc = 9; // ля
+      this.down = null;
       this.canvas = document.createElement("canvas");
       this.g = this.canvas.getContext("2d");
+      const pick = document.createElement("div");
+      pick.className = "player-controls";
+      pick.innerHTML = '<span class="player-mode">' +
+        OCTAVES.map(([name], i) => `<button type="button" data-oct="${i}"${i === this.oct ? ' class="on"' : ""}>${name}</button>`).join("") + "</span>";
       const bar = document.createElement("div");
       bar.className = "player-controls";
-      bar.innerHTML =
-        '<button type="button" class="player-play lab-all">▶ Все ля снизу вверх</button>' +
-        '<button type="button" class="lab-sum">440 + 440 + 440 = 1320 Гц</button>' +
-        '<span class="player-score lab-info"></span>';
-      el.append(this.canvas, bar);
+      bar.innerHTML = '<button type="button" class="player-play lab-all">▶ Эта нота во всех октавах</button>' +
+        '<button type="button" class="lab-sum">440 + 440 + 440 = 1320 Гц</button><span class="player-score lab-info"></span>';
+      el.append(pick, this.canvas, bar);
       this.info = bar.querySelector(".lab-info");
+      pick.querySelectorAll("[data-oct]").forEach((b) => b.addEventListener("click", () => {
+        pick.querySelectorAll("[data-oct]").forEach((x) => x.classList.toggle("on", x === b));
+        this.oct = Number(b.dataset.oct);
+        this.freq = null;
+        this.draw();
+      }));
       bar.querySelector(".lab-all").addEventListener("click", () => this.playAll());
       holdButton(bar.querySelector(".lab-sum"), () => {
         this.freq = 1320;
@@ -996,45 +1007,54 @@
         this.draw();
         return holdNote(1320);
       });
-      holdable(this.canvas, (x) => {
-        const i = Math.floor((x / this.w) * OCTAVES.length);
-        const [name, f] = OCTAVES[Math.max(0, Math.min(OCTAVES.length - 1, i))];
-        this.freq = f;
-        this.text = `ля ${name === "контроктава" ? "контроктавы" : name.replace(/ая$/, "ой").replace(/ья$/, "ьей") + " октавы"} — ${f} колебаний в секунду`;
+      holdable(this.canvas, (x, y) => {
+        const m = ChordLab.prototype.keyAt.call(this, x, y);
+        if (m === undefined) return;
+        this.pc = m % 12;
+        this.down = m;
+        this.freq = null;
         this.draw();
-        return holdNote(f);
+        const stop = holdNote(this.noteFreq(this.pc, this.oct));
+        return () => { stop(); this.down = null; this.draw(); };
       });
       this.resize();
       window.addEventListener("resize", () => this.resize());
     }
 
+    // notes of the octave as MIDI-like numbers on a fixed one-octave keyboard (до … си), so the layout never moves
+    noteFreq(pc, oct) { return midiFreq(12 * (OCTAVES[oct][2] + 1) + pc); }
+
     resize() {
-      const w = this.el.clientWidth, h = Math.round(Math.min(230, w * 0.4));
+      const w = this.el.clientWidth, h = Math.round(Math.min(300, w * 0.5));
       const dpr = window.devicePixelRatio || 1;
       this.canvas.width = w * dpr; this.canvas.height = h * dpr; this.canvas.style.height = h + "px";
       this.g.setTransform(dpr, 0, 0, dpr, 0, 0);
       this.w = w; this.h = h;
+      this.lo = 0; this.hi = 11;
+      ChordLab.prototype.layout.call(this);
+      this.top = Math.round(h * 0.38); this.keysH = h - this.top - 6;
       this.draw();
-    }
-
-    play(f, text, at) {
-      audio();
-      pianoNote(at || ctx.currentTime, 69 + 12 * Math.log2(f / 440), 0.9);
-      const show = () => { this.freq = f; this.text = text; this.draw(); };
-      if (at) setTimeout(show, (at - ctx.currentTime) * 1000); else show();
     }
 
     playAll() {
       audio();
-      OCTAVES.forEach(([name, f], i) => this.play(f, `ля: ${f} Гц, каждый следующий звук вдвое чаще`, ctx.currentTime + 0.05 + i * 0.6));
+      const t = ctx.currentTime + 0.05;
+      OCTAVES.forEach((o, i) => {
+        const f = this.noteFreq(this.pc, i);
+        pianoNote(t + i * 0.55, 69 + 12 * Math.log2(f / 440), 0.5);
+        setTimeout(() => { this.oct = i; this.freq = null; this.syncButtons(); this.draw(); }, (t + i * 0.55 - ctx.currentTime) * 1000);
+      });
+    }
+    syncButtons() {
+      this.el.querySelectorAll("[data-oct]").forEach((x) => x.classList.toggle("on", Number(x.dataset.oct) === this.oct));
     }
 
     draw() {
-      const g = this.g, w = this.w, h = this.h;
-      g.fillStyle = COLORS.bg; g.fillRect(0, 0, w, h);
-      // the wave: 1/55 s of it, so the lowest ля shows one period and every octave doubles the count
-      const waveH = h * 0.38, mid = 12 + waveH / 2;
-      const periods = this.freq / 55;
+      const g = this.g, w = this.w;
+      g.fillStyle = COLORS.bg; g.fillRect(0, 0, w, this.h);
+      const f = this.freq || this.noteFreq(this.pc, this.oct);
+      // the wave: 1/55 s of it, so ля of the contra-octave shows one period and each octave up doubles the count
+      const waveH = this.top - 30, mid = 8 + waveH / 2, periods = f / 55;
       g.strokeStyle = COLORS.right; g.lineWidth = periods > 30 ? 1 : 2;
       g.beginPath();
       for (let x = 0; x <= w - 16; x += 0.5) {
@@ -1043,27 +1063,37 @@
       }
       g.stroke();
       g.fillStyle = COLORS.muted; g.font = "11px Segoe UI, Arial, sans-serif"; g.textAlign = "left";
-      g.fillText(`${periods % 1 ? periods.toFixed(1).replace(".", ",") : periods} ${plural(periods, "колебание", "колебания", "колебаний")} за 1/55 секунды`, 8, 12 + waveH + 14);
-      // the chain of boxes, as in the diagram
-      const n = OCTAVES.length, gap = 8, bw = (w - 16 - gap * (n - 1)) / n, top = 12 + waveH + 26, bh = h - top - 8;
-      OCTAVES.forEach(([name, f, sci], i) => {
-        const x = 8 + i * (bw + gap);
-        const on = f === this.freq;
-        g.fillStyle = on ? "#e3eaf7" : "#fff";
-        roundRect(g, x, top, bw, bh, 8); g.fill();
+      g.fillText(`${periods % 1 ? periods.toFixed(1).replace(".", ",") : periods} ${plural(periods, "колебание", "колебания", "колебаний")} за 1/55 секунды`, 8, this.top - 8);
+      // one octave of keys with their frequencies
+      const { top, keysH, kw } = this;
+      g.textAlign = "center";
+      for (let m = 0; m <= 11; m++) {
+        if (isBlack(m)) continue;
+        const k = this.keys[m], on = m === this.pc;
+        g.fillStyle = m === this.down ? COLORS.flash : on ? "#e3eaf7" : "#fff";
+        roundRect(g, k.x + 1, top, k.w - 2, keysH, 6); g.fill();
         g.strokeStyle = on ? COLORS.right : "#cfcfc6"; g.lineWidth = on ? 2.5 : 1.5; g.stroke();
-        g.textAlign = "center";
-        g.fillStyle = COLORS.muted; g.font = `${Math.min(12, bw * 0.13)}px Segoe UI, Arial, sans-serif`;
-        g.fillText(name, x + bw / 2, top + bh * 0.3);
-        g.fillStyle = COLORS.text; g.font = `bold ${Math.min(15, bw * 0.17)}px Segoe UI, Arial, sans-serif`;
-        g.fillText(`${f} Гц`, x + bw / 2, top + bh * 0.6);
-        g.fillStyle = COLORS.muted; g.font = `${Math.min(12, bw * 0.13)}px Segoe UI, Arial, sans-serif`;
-        g.fillText(sci, x + bw / 2, top + bh * 0.85);
-      });
-      this.info.textContent = this.text;
+        g.fillStyle = "#222"; g.font = `${on ? "bold " : ""}${Math.min(15, kw * 0.22)}px Segoe UI, Arial, sans-serif`;
+        g.fillText(NAMES[m], k.x + k.w / 2, top + keysH - 30);
+        g.fillStyle = COLORS.muted; g.font = `${Math.min(12, kw * 0.18)}px Segoe UI, Arial, sans-serif`;
+        g.fillText(`${hz(this.noteFreq(m, this.oct))} Гц`, k.x + k.w / 2, top + keysH - 12);
+      }
+      for (let m = 0; m <= 11; m++) {
+        if (!isBlack(m)) continue;
+        const k = this.keys[m], on = m === this.pc;
+        g.fillStyle = m === this.down ? COLORS.flash : on ? COLORS.right : "#c5c5bc";
+        roundRect(g, k.x, top - 1, k.w, keysH * 0.6 + 1, 4); g.fill();
+        g.fillStyle = on ? "#fff" : "#333"; g.font = `${Math.min(11, k.w * 0.2)}px Segoe UI, Arial, sans-serif`;
+        g.fillText(NAMES[m], k.x + k.w / 2, top + keysH * 0.6 - 22);
+        g.fillText(hz(this.noteFreq(m, this.oct)), k.x + k.w / 2, top + keysH * 0.6 - 8);
+      }
+      if (this.freq) { this.info.textContent = this.text; return; }
+      const [, gen, sci] = OCTAVES[this.oct];
+      const lower = this.oct > 0 ? `${hz(f / 2)} Гц октавой ниже` : "";
+      const upper = this.oct < OCTAVES.length - 1 ? `${hz(f * 2)} Гц октавой выше` : "";
+      this.info.textContent = `${NAMES[this.pc]} ${gen} (${LETTERS[this.pc]}${sci}) — ${hz(f)} Гц; ` + [lower, upper].filter(Boolean).join(", ");
     }
   }
-
 
   // ---------- intervals (1.5) ----------
   // Exact ratios, as on a monochord: the waves of the two notes meet again every `q` periods of the lower one.

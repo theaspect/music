@@ -1598,6 +1598,21 @@
     [5 / 9, "ля♯", "5/9 струны — малая септима выше", "5/9"],
     [8 / 15, "си", "8/15 струны — большая септима выше", "8/15"],
     [1 / 2, "до", "половина струны — октава выше", "1/2"]];
+  // The second octave: every share halved. Only its white notes get labels; the marks sit twice as close.
+  const STRING_MARKS_2 = [
+    [15 / 32, "до♯", "15/32 струны — до♯ на октаву выше, чем при 15/16 струны", "15/32", 2],
+    [4 / 9, "ре", "4/9 струны — ре на октаву выше, чем при 8/9 струны", "4/9", 2],
+    [5 / 12, "ре♯", "5/12 струны — ре♯ на октаву выше, чем при 5/6 струны", "5/12", 2],
+    [2 / 5, "ми", "2/5 струны — ми на октаву выше, чем при 4/5 струны", "2/5", 2],
+    [3 / 8, "фа", "3/8 струны — фа на октаву выше, чем при 3/4 струны", "3/8", 2],
+    [16 / 45, "фа♯", "16/45 струны — фа♯ на октаву выше, чем при 32/45 струны", "16/45", 2],
+    [1 / 3, "соль", "1/3 струны — соль на октаву выше, чем при 2/3 струны", "1/3", 2],
+    [5 / 16, "соль♯", "5/16 струны — соль♯ на октаву выше, чем при 5/8 струны", "5/16", 2],
+    [3 / 10, "ля", "3/10 струны — ля на октаву выше, чем при 3/5 струны", "3/10", 2],
+    [5 / 18, "ля♯", "5/18 струны — ля♯ на октаву выше, чем при 5/9 струны", "5/18", 2],
+    [4 / 15, "си", "4/15 струны — си на октаву выше, чем при 8/15 струны", "4/15", 2],
+    [1 / 4, "до", "четверть струны — две октавы выше", "1/4", 2]];
+  const STRING_ALL = [...STRING_MARKS, ...STRING_MARKS_2];
   class StringLab {
     constructor(el) {
       this.el = el;
@@ -1609,12 +1624,21 @@
       this.g = this.canvas.getContext("2d");
       const bar = document.createElement("div");
       bar.className = "player-controls";
-      bar.innerHTML = STRING_MARKS.map(([, name], i) => `<button type="button" data-mark="${i}">${name}</button>`).join("") +
+      bar.innerHTML = '<span class="player-mode"><button type="button" data-o="1" class="on">1-я октава</button><button type="button" data-o="2">2-я октава</button></span>' +
+        STRING_MARKS.map(([, name], i) => `<button type="button" data-mark="${i}">${name}</button>`).join("") +
         '<label>Натяжение <input type="range" min="50" max="200" step="5" value="100"> <span class="lab-ten">100</span> %</label>' +
         '<span class="player-score lab-info"></span>';
       el.append(this.canvas, bar);
       this.info = bar.querySelector(".lab-info");
-      bar.querySelectorAll("[data-mark]").forEach((b) => b.addEventListener("click", () => { this.part = STRING_MARKS[b.dataset.mark][0]; this.pluck(); }));
+      this.octave = 1; // which octave the note buttons put the finger in
+      bar.querySelectorAll("[data-o]").forEach((b) => b.addEventListener("click", () => {
+        bar.querySelectorAll("[data-o]").forEach((x) => x.classList.toggle("on", x === b));
+        this.octave = Number(b.dataset.o);
+      }));
+      bar.querySelectorAll("[data-mark]").forEach((b) => b.addEventListener("click", () => {
+        this.part = STRING_MARKS[b.dataset.mark][0] / this.octave;
+        this.pluck();
+      }));
       const ten = bar.querySelector("input");
       ten.addEventListener("input", () => { this.tension = ten.value / 100; bar.querySelector(".lab-ten").textContent = ten.value; this.update(); });
       // Drag the finger along the string (it snaps to the simple ratios; at the edge the whole string sounds);
@@ -1622,8 +1646,8 @@
       let press = null;
       const posAt = (ev) => (ev.clientX - this.canvas.getBoundingClientRect().left - this.x0) / this.len;
       const setFinger = (pos) => {
-        let part = Math.max(0.2, Math.min(1, 1 - pos));
-        const snap = STRING_MARKS.find(([share]) => Math.abs(share - part) < 0.008);
+        let part = Math.max(0.25, Math.min(1, 1 - pos));
+        const snap = STRING_ALL.find(([share]) => Math.abs(share - part) < (share < 0.5 ? 0.005 : 0.008));
         if (snap) part = snap[0];
         this.part = part;
         this.update();
@@ -1655,7 +1679,7 @@
     }
     freq() { return (STRING_BASE * Math.sqrt(this.tension)) / this.part; }
     resize() {
-      const w = this.el.clientWidth, h = 196;
+      const w = this.el.clientWidth, h = 206;
       const dpr = window.devicePixelRatio || 1;
       this.canvas.width = w * dpr; this.canvas.height = h * dpr; this.canvas.style.height = h + "px";
       this.g.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -1664,7 +1688,7 @@
     }
     update() {
       const f = this.freq();
-      const mark = STRING_MARKS.find(([share]) => Math.abs(share - this.part) < 0.005);
+      const mark = STRING_ALL.find(([share]) => Math.abs(share - this.part) < 0.003);
       const semis = 12 * Math.log2(1 / this.part);
       this.info.textContent = (mark ? `${mark[1]}: ${mark[2]}` : `${Math.round(this.part * 100)} % струны — на ${semis.toFixed(1).replace(".", ",")} полутона выше`) +
         `, ${Math.round(f)} Гц` +
@@ -1688,10 +1712,23 @@
       g.fillStyle = COLORS.bg; g.fillRect(0, 0, this.w, this.h);
       const fx = x0 + len * (1 - this.part);
       // marks for the simple ratios
-      STRING_MARKS.forEach(([share, name, , frac]) => {
+      STRING_ALL.forEach(([share, name, , frac, oct]) => {
         const x = x0 + len * (1 - share);
         const sharp = name.includes("♯"); // sharps above the string, like black keys; the rest below
         const labelY = sharp ? y0 - 40 : y0 + 44;
+        if (oct === 2) {
+          // second octave: ticks for every note, small labels for the white ones only
+          g.strokeStyle = "#d8d8cf"; g.lineWidth = 1; g.setLineDash([3, 3]);
+          g.beginPath(); g.moveTo(x, y0 - (sharp ? 20 : 34)); g.lineTo(x, y0 + 30); g.stroke(); g.setLineDash([]);
+          if (sharp) return;
+          const row = ["ми", "соль", "си"].includes(name) ? 24 : 0; // white notes in two rows, they sit close
+          g.strokeStyle = "#e4e4dc"; g.beginPath(); g.moveTo(x, y0 + 30); g.lineTo(x, labelY + row - 10); g.stroke();
+          g.fillStyle = COLORS.text; g.font = "bold 10px Segoe UI, Arial, sans-serif"; g.textAlign = "center";
+          g.fillText(name, x, labelY + row);
+          g.fillStyle = COLORS.muted; g.font = "9px Segoe UI, Arial, sans-serif";
+          g.fillText(frac, x, labelY + row + 11);
+          return;
+        }
         g.strokeStyle = "#d8d8cf"; g.lineWidth = 1; g.setLineDash([3, 3]);
         g.beginPath(); g.moveTo(x, y0 - 34); g.lineTo(x, y0 + 30); g.stroke(); g.setLineDash([]);
         g.fillStyle = sharp ? COLORS.muted : COLORS.text; g.font = `${sharp ? "" : "bold "}${sharp ? 10 : 12}px Segoe UI, Arial, sans-serif`; g.textAlign = "center";

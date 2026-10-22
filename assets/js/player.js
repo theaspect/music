@@ -14,19 +14,19 @@
   const COLORS = { right: "#2f72c9", left: "#e0892b", foot: "#555b66", pad: "#cfe0f7", cymbal: "#eef3fb",
                    line: "#c9c9c0", text: "#111", muted: "#666", flash: "#ffd166", bg: "#fafaf7" };
 
-  // Pad positions follow the kit diagram in 3.4 (a 632 × 330 box): top row crash, tom, ride;
-  // bottom row hi-hat, snare, tom, floor tom; pedals below.
+  // Rows follow the kit diagram in 3.4 (top: crash, tom, ride; bottom: hi-hat, snare, tom, floor tom; pedals below),
+  // but in a 760-wide box where every pad and pedal has a column of its own, so lanes never overlap.
   const KIT = {
-    cr: { name: "Крэш", x: 160, y: 70, r: 44, cymbal: true, hand: "right" },
-    t1: { name: "Том 1", x: 316, y: 72, r: 44, hand: "right" },
-    rd: { name: "Райд", x: 472, y: 70, r: 44, cymbal: true, hand: "right" },
-    hh: { name: "Хай-хэт", x: 110, y: 175, r: 44, cymbal: true, hand: "right" },
-    oh: { name: "Хай-хэт", x: 110, y: 175, r: 44, cymbal: true, hand: "right", pad: "hh" },
-    sn: { name: "Малый", x: 235, y: 180, r: 44, hand: "left" },
-    t2: { name: "Том 2", x: 390, y: 180, r: 44, hand: "right" },
-    ft: { name: "Напольный", x: 515, y: 175, r: 44, hand: "right" },
-    hp: { name: "Педаль хэта", x: 150, y: 262, pedal: true },
-    kk: { name: "Бочка", x: 482, y: 262, pedal: true },
+    cr: { name: "Крэш", x: 190, y: 70, r: 38, cymbal: true, hand: "right" },
+    t1: { name: "Том 1", x: 345, y: 72, r: 38, hand: "right" },
+    rd: { name: "Райд", x: 585, y: 70, r: 38, cymbal: true, hand: "right" },
+    hh: { name: "Хай-хэт", short: "Хэт", x: 60, y: 175, r: 38, cymbal: true, hand: "right" },
+    oh: { name: "Хай-хэт", x: 60, y: 175, r: 38, cymbal: true, hand: "right", pad: "hh" },
+    sn: { name: "Малый", x: 265, y: 180, r: 38, hand: "left" },
+    t2: { name: "Том 2", x: 425, y: 180, r: 38, hand: "right" },
+    ft: { name: "Напольный", short: "Нап.", x: 680, y: 175, r: 38, hand: "right" },
+    hp: { name: "Педаль хэта", short: "Пед. хэта", x: 125, y: 262, pedal: true },
+    kk: { name: "Бочка", x: 505, y: 262, pedal: true },
   };
 
   // ---------- audio ----------
@@ -174,6 +174,8 @@
         '<label>Темп <input type="range" min="40" max="160" step="5"> <span class="player-bpm"></span> BPM</label>' +
         '<label><input type="checkbox" class="player-click"> метроном</label>';
       this.el.append(this.canvas, bar);
+      this.flashes = {};
+      this.canvas.addEventListener("pointerdown", (ev) => this.tap(ev));
       this.button = bar.querySelector(".player-play");
       const range = bar.querySelector("input[type=range]");
       const bpmLabel = bar.querySelector(".player-bpm");
@@ -287,48 +289,37 @@
       const g = this.g, w = this.w;
       const highway = this.h * 0.5;
       const kitTop = highway + 8;
-      const sx = w / 632, sy = (this.h - kitTop) / 300;
-      const s = Math.min(sx, sy);
-      const ox = (w - 632 * s) / 2;
+      const s = Math.min(w / 760, (this.h - kitTop) / 300);
+      const ox = (w - 760 * s) / 2;
       const px = (x) => ox + x * s;
       const py = (y) => kitTop + (y - 20) * s;
-      const perBeat = highway / BEATS_VISIBLE;
+      const perBeat = (highway - 40) / BEATS_VISIBLE;
       const yOf = (beat) => highway - (beat - cur) * perBeat;
       const used = new Set(this.song.events.map((e) => KIT[e.key].pad || e.key));
-      const lanes = [...used].filter((k) => !KIT[k].pedal);
       const laneW = 40 * s;
+      const laneX = spreadLanes([...used], 46);
+      const padTop = (k) => py(KIT[k].y) - (KIT[k].pedal ? 0 : KIT[k].r * s);
 
-      // beat lines and lanes
+      g.save();
+      g.beginPath(); g.rect(0, 36, w, highway - 36); g.clip();
       for (let b = Math.ceil(cur); b <= cur + BEATS_VISIBLE; b++) {
         g.strokeStyle = b % 4 === 0 ? "#b5b5ac" : "#e4e4dc";
         g.lineWidth = b % 4 === 0 ? 2 : 1;
         g.beginPath(); g.moveTo(0, yOf(b)); g.lineTo(w, yOf(b)); g.stroke();
       }
-      lanes.forEach((k) => {
-        g.fillStyle = "rgba(47,114,201,0.06)";
-        g.fillRect(px(KIT[k].x) - laneW / 2, 0, laneW, highway);
+      used.forEach((k) => {
+        g.fillStyle = KIT[k].pedal ? "rgba(85,91,102,0.08)" : "rgba(47,114,201,0.06)";
+        g.fillRect(px(laneX[k]) - laneW / 2, 0, laneW, highway);
       });
-      g.strokeStyle = COLORS.text; g.lineWidth = 2;
-      g.beginPath(); g.moveTo(0, highway); g.lineTo(w, highway); g.stroke();
-
-      // falling notes: pedals are full-width bars, pads are blocks in their lane
-      const visible = this.occurrences(cur - 0.25, cur + BEATS_VISIBLE)
-        .sort((a, b) => Number(!!KIT[b.key].pedal) - Number(!!KIT[a.key].pedal));
-      visible.forEach((e) => {
-        const kit = KIT[e.key];
+      this.occurrences(cur - 0.25, cur + BEATS_VISIBLE).forEach((e) => {
+        const k = KIT[e.key].pad || e.key;
+        const x = px(laneX[k]);
         const y = yOf(e.beat);
-        if (y > highway + 4) return;
-        if (kit.pedal) {
-          g.fillStyle = e.key === "kk" ? "rgba(85,91,102,0.55)" : "rgba(85,91,102,0.3)";
-          g.fillRect(4, y - 4, w - 8, 8);
-          return;
-        }
-        const x = px(KIT[kit.pad || e.key].x);
         g.fillStyle = COLORS[e.hand] || COLORS.right;
         roundRect(g, x - laneW / 2 + 2, y - 7, laneW - 4, 14, 4);
         g.fill();
         if (e.key === "oh") {
-          g.strokeStyle = COLORS.text; g.lineWidth = 1.5;
+          g.strokeStyle = "#fff"; g.lineWidth = 1.5;
           g.beginPath(); g.arc(x, y, 4, 0, Math.PI * 2); g.stroke();
         }
         if (e.label) {
@@ -336,39 +327,88 @@
           g.fillText(e.label, x, y + 4);
         }
       });
+      g.restore();
 
-      // the kit: rings close in on the pad during the beat before a hit, the pad flashes on the hit
-      const flash = new Set(this.occurrences(cur - 0.15, cur + 0.001).filter((e) => e.beat <= cur).map((e) => KIT[e.key].pad || e.key));
-      const soon = this.occurrences(cur, cur + 1).filter((e) => e.beat > cur);
+      // lane titles and dashed links from each lane down to its pad
+      used.forEach((k) => {
+        g.fillStyle = COLORS.text; g.textAlign = "center";
+        g.font = `bold ${Math.max(9, 11 * s)}px Segoe UI, Arial, sans-serif`;
+        g.fillText(KIT[k].short || KIT[k].name, px(laneX[k]), 32);
+        g.strokeStyle = KIT[k].pedal ? COLORS.foot : COLORS.right;
+        g.globalAlpha = 0.35; g.lineWidth = 2; g.setLineDash([4, 4]);
+        g.beginPath(); g.moveTo(px(laneX[k]), highway); g.lineTo(px(KIT[k].x), padTop(k)); g.stroke();
+        g.setLineDash([]); g.globalAlpha = 1;
+      });
+      g.strokeStyle = COLORS.text; g.lineWidth = 2;
+      g.beginPath(); g.moveTo(0, highway); g.lineTo(w, highway); g.stroke();
+
+      // the kit: a ring closes in during the beat before a hit, the pad flashes on the hit
+      const flash = new Set(this.occurrences(cur - 0.15, cur + 0.001)
+        .filter((e) => this.playing && e.beat <= cur).map((e) => KIT[e.key].pad || e.key));
+      this.manualFlashes().forEach((k) => flash.add(k));
+      this.targets = [];
       Object.entries(KIT).forEach(([k, kit]) => {
         if (kit.pad) return;
         const on = flash.has(k);
-        const dim = !used.has(k);
-        g.globalAlpha = dim ? 0.35 : 1;
+        g.globalAlpha = used.has(k) ? 1 : 0.35;
         if (kit.pedal) {
-          g.fillStyle = on ? COLORS.flash : "#7eaee6";
-          roundRect(g, px(kit.x) - 45 * s, py(kit.y), 90 * s, 40 * s, 6 * s);
-          g.fill(); g.strokeStyle = COLORS.right; g.lineWidth = 2; g.stroke();
+          const r = { x: px(kit.x) - 45 * s, y: py(kit.y), w: 90 * s, h: 40 * s };
+          g.fillStyle = on ? COLORS.flash : "#9aa1ad";
+          roundRect(g, r.x, r.y, r.w, r.h, 6 * s);
+          g.fill(); g.strokeStyle = COLORS.foot; g.lineWidth = 2; g.stroke();
           label(g, kit.name, px(kit.x), py(kit.y) + 24 * s, s);
+          this.targets.push({ key: k, inside: (x, y) => x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h });
         } else {
+          const cx = px(kit.x), cy = py(kit.y), r = kit.r * s;
           g.fillStyle = on ? COLORS.flash : kit.cymbal ? COLORS.cymbal : COLORS.pad;
-          g.beginPath(); g.arc(px(kit.x), py(kit.y), kit.r * s, 0, Math.PI * 2); g.fill();
+          g.beginPath(); g.arc(cx, cy, r, 0, Math.PI * 2); g.fill();
           g.strokeStyle = COLORS.right; g.lineWidth = 2; g.stroke();
-          label(g, kit.name, px(kit.x), py(kit.y) + 4 * s, s);
+          label(g, kit.name, cx, cy + 4 * s, s);
+          this.targets.push({ key: k, inside: (x, y) => (x - cx) ** 2 + (y - cy) ** 2 <= r * r });
         }
         g.globalAlpha = 1;
       });
-      soon.forEach((e) => {
-        const kit = KIT[KIT[e.key].pad || e.key];
-        if (kit.pedal) return;
-        const k = e.beat - cur; // 1 → 0 as the hit approaches
-        g.strokeStyle = COLORS[e.hand] || COLORS.right;
-        g.globalAlpha = 1 - k * 0.7;
-        g.lineWidth = 3;
-        g.beginPath(); g.arc(px(kit.x), py(kit.y), kit.r * s * (1 + k), 0, Math.PI * 2); g.stroke();
-        g.globalAlpha = 1;
-      });
-      this.legend(["П — правая рука", COLORS.right], ["Л — левая", COLORS.left], ["полоса — педаль", COLORS.foot]);
+      if (this.playing) {
+        this.occurrences(cur, cur + 1).filter((e) => e.beat > cur).forEach((e) => {
+          const kit = KIT[KIT[e.key].pad || e.key];
+          const left = e.beat - cur; // 1 → 0 as the hit approaches
+          g.strokeStyle = COLORS[e.hand] || COLORS.right;
+          g.globalAlpha = 1 - left * 0.7;
+          g.lineWidth = 3;
+          if (kit.pedal) {
+            const grow = 1 + left * 0.6;
+            roundRect(g, px(kit.x) - 45 * s * grow, py(kit.y) + 20 * s - 20 * s * grow, 90 * s * grow, 40 * s * grow, 6 * s);
+            g.stroke();
+          } else {
+            g.beginPath(); g.arc(px(kit.x), py(kit.y), kit.r * s * (1 + left), 0, Math.PI * 2); g.stroke();
+          }
+          g.globalAlpha = 1;
+        });
+      }
+      this.legend(["П — правая рука", COLORS.right], ["Л — левая", COLORS.left], ["серый — нога", COLORS.foot]);
+    }
+
+    // A tap on a pad, pedal or key plays it right away, whether or not the loop is running.
+    tap(ev) {
+      const box = this.canvas.getBoundingClientRect();
+      const x = ev.clientX - box.left, y = ev.clientY - box.top;
+      const hit = (this.targets || []).find((target) => target.inside(x, y));
+      if (!hit) return;
+      ev.preventDefault();
+      audio();
+      if (this.kind === "piano") pianoNote(ctx.currentTime, hit.key, 0.5);
+      else DRUM_SOUND[hit.key](ctx.currentTime);
+      this.flashes[hit.key] = performance.now();
+      if (!this.playing) {
+        this.draw(IDLE);
+        setTimeout(() => !this.playing && this.draw(IDLE), 200);
+      }
+    }
+    manualFlashes() {
+      const now = performance.now();
+      return Object.keys(this.flashes)
+        .filter((k) => now - this.flashes[k] < 180)
+        .map((k) => (this.kind === "piano" ? Number(k) : k));
     }
 
     drawPiano(cur) {
@@ -394,7 +434,7 @@
       }
       const sounding = new Set();
       this.occurrences(cur - 8, cur + BEATS_VISIBLE).forEach((e) => {
-        if (e.beat <= cur && cur < e.beat + e.dur) sounding.add(e.midi);
+        if (this.playing && e.beat <= cur && cur < e.beat + e.dur) sounding.add(e.midi);
         const y0 = yOf(e.beat), y1 = yOf(e.beat + e.dur);
         if (y1 > top || !keyX[e.midi]) return;
         const k = keyX[e.midi];
@@ -406,6 +446,14 @@
         if (Math.min(y0, top) - y1 > 16) g.fillText(e.label, k.x + k.w / 2, Math.min(y0, top) - 8);
       });
 
+      this.manualFlashes().forEach((m) => sounding.add(m));
+      this.targets = [];
+      for (let m = lo; m <= hi; m++) {
+        const k = keyX[m];
+        const bottom = top + (isBlack(m) ? keysH * 0.6 : keysH);
+        const target = { key: m, inside: (x, y) => x >= k.x && x <= k.x + k.w && y >= top && y <= bottom };
+        if (isBlack(m)) this.targets.unshift(target); else this.targets.push(target);
+      }
       whites.forEach((m) => {
         const k = keyX[m];
         g.fillStyle = sounding.has(m) ? COLORS.flash : "#fff";
@@ -436,6 +484,16 @@
         x += g.measureText(text).width + 30;
       });
     }
+  }
+
+  // Lanes sit above their pads; where pads overlap horizontally, neighbours are pushed apart just enough.
+  function spreadLanes(keys, gap) {
+    const order = keys.map((k) => ({ k, x: KIT[k].x })).sort((a, b) => a.x - b.x);
+    for (let i = 1; i < order.length; i++) order[i].x = Math.max(order[i].x, order[i - 1].x + gap);
+    const overflow = order.length ? order[order.length - 1].x - 720 : 0;
+    if (overflow > 0) order.forEach((o) => (o.x -= overflow));
+    for (let i = order.length - 2; i >= 0; i--) order[i].x = Math.min(order[i].x, order[i + 1].x - gap);
+    return Object.fromEntries(order.map((o) => [o.k, o.x]));
   }
 
   function roundRect(g, x, y, w, h, r) {

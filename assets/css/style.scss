@@ -73,7 +73,7 @@ table img {
   display: block;
   width: 100%;
 }
-.player-controls button:not(.player-play):not([data-mode]) {
+.player-controls > button:not(.player-play) {
   font: inherit;
   padding: 4px 12px;
   border: 1px solid #2f72c9;

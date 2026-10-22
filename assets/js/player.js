@@ -122,6 +122,51 @@
     });
   }
 
+  // A piano-like voice that keeps sounding until stop() is called (for "play while pressed").
+  function holdNote(f) {
+    const t = ctx.currentTime;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.3, t + 0.01);
+    g.gain.exponentialRampToValueAtTime(0.12, t + 0.5);
+    g.connect(ctx.destination);
+    const oscs = [[1, "triangle", 1], [2, "sine", 0.35], [3, "sine", 0.12]].map(([h, type, amp]) => {
+      const o = ctx.createOscillator(), og = ctx.createGain();
+      o.type = type; o.frequency.value = f * h; og.gain.value = amp;
+      o.connect(og); og.connect(g); o.start(t);
+      return o;
+    });
+    return () => {
+      const s = ctx.currentTime;
+      g.gain.cancelScheduledValues(s);
+      g.gain.setValueAtTime(Math.max(0.0001, g.gain.value), s);
+      g.gain.exponentialRampToValueAtTime(0.0001, s + 0.15);
+      oscs.forEach((o) => o.stop(s + 0.2));
+    };
+  }
+  // Press-and-hold on a canvas: `begin(x, y)` returns a stop function, or nothing when the press hits nothing.
+  function holdable(canvas, begin) {
+    let stop = null;
+    canvas.addEventListener("pointerdown", (ev) => {
+      const box = canvas.getBoundingClientRect();
+      audio();
+      stop = begin(ev.clientX - box.left, ev.clientY - box.top) || null;
+      if (stop) { ev.preventDefault(); canvas.setPointerCapture(ev.pointerId); }
+    });
+    const end = () => { if (stop) { stop(); stop = null; } };
+    ["pointerup", "pointercancel", "lostpointercapture"].forEach((e) => canvas.addEventListener(e, end));
+  }
+  // Karplus–Strong plucked string: a burst of noise circulating through a short, slightly lossy delay line.
+  function pluck(t, f, gain) {
+    const rate = ctx.sampleRate, n = Math.round(rate / f), len = Math.round(rate * 2.5);
+    const buf = ctx.createBuffer(1, len, rate), d = buf.getChannelData(0);
+    for (let i = 0; i < n; i++) d[i] = Math.random() * 2 - 1;
+    for (let i = n; i < len; i++) d[i] = 0.497 * (d[i - n] + d[i - n + 1 < i ? i - n + 1 : i - n]);
+    const s = ctx.createBufferSource(), g = ctx.createGain();
+    s.buffer = buf; g.gain.value = gain;
+    s.connect(g); g.connect(ctx.destination); s.start(t);
+  }
+
   // ---------- notes ----------
   const SYL = { "до": 0, "ре": 2, "ми": 4, "фа": 5, "соль": 7, "ля": 9, "си": 11 };
   const NAMES = ["до", "до♯", "ре", "ре♯", "ми", "фа", "фа♯", "соль", "соль♯", "ля", "ля♯", "си"];
@@ -853,11 +898,13 @@
       bar.querySelector(".lab-all").addEventListener("click", () => this.playAll());
       bar.querySelector(".lab-sum").addEventListener("click", () =>
         this.play(1320, "1320 Гц — это уже не ля, а почти ми третьей октавы: частоты умножаются, а не складываются"));
-      this.canvas.addEventListener("pointerdown", (ev) => {
-        const box = this.canvas.getBoundingClientRect();
-        const i = Math.floor(((ev.clientX - box.left) / this.w) * OCTAVES.length);
+      holdable(this.canvas, (x) => {
+        const i = Math.floor((x / this.w) * OCTAVES.length);
         const [name, f] = OCTAVES[Math.max(0, Math.min(OCTAVES.length - 1, i))];
-        this.play(f, `ля ${name === "контроктава" ? "контроктавы" : name.replace(/ая$/, "ой").replace(/ья$/, "ьей") + " октавы"} — ${f} колебаний в секунду`);
+        this.freq = f;
+        this.text = `ля ${name === "контроктава" ? "контроктавы" : name.replace(/ая$/, "ой").replace(/ья$/, "ьей") + " октавы"} — ${f} колебаний в секунду`;
+        this.draw();
+        return holdNote(f);
       });
       this.resize();
       window.addEventListener("resize", () => this.resize());
@@ -1231,6 +1278,371 @@
     }
   }
 
+
+  // ---------- keyboard (1.2): every key sounds while pressed ----------
+  class KeyboardLab {
+    constructor(el) {
+      this.el = el;
+      this.lo = 60; this.hi = 84; // до4 … до6, as in the diagram
+      this.down = null;
+      this.canvas = document.createElement("canvas");
+      this.g = this.canvas.getContext("2d");
+      el.append(this.canvas);
+      holdable(this.canvas, (x, y) => {
+        const m = ChordLab.prototype.keyAt.call(this, x, y);
+        if (m === undefined) return;
+        this.down = m; this.draw();
+        const stop = holdNote(440 * Math.pow(2, (m - 69) / 12));
+        return () => { stop(); this.down = null; this.draw(); };
+      });
+      this.resize();
+      window.addEventListener("resize", () => this.resize());
+    }
+    resize() {
+      const w = this.el.clientWidth, h = Math.round(Math.min(210, w * 0.34));
+      const dpr = window.devicePixelRatio || 1;
+      this.canvas.width = w * dpr; this.canvas.height = h * dpr; this.canvas.style.height = h + "px";
+      this.g.setTransform(dpr, 0, 0, dpr, 0, 0);
+      this.w = w; this.h = h;
+      ChordLab.prototype.layout.call(this);
+      this.keysH = this.h - 34;
+      this.draw();
+    }
+    draw() {
+      const g = this.g, { top, keysH, kw } = this;
+      g.fillStyle = COLORS.bg; g.fillRect(0, 0, this.w, this.h);
+      g.textAlign = "center";
+      for (let m = this.lo; m <= this.hi; m++) {
+        if (isBlack(m)) continue;
+        const k = this.keys[m];
+        g.fillStyle = m === this.down ? COLORS.flash : m % 12 === 0 ? "#e3eaf7" : "#fff";
+        roundRect(g, k.x + 1, top, k.w - 2, keysH, 6); g.fill();
+        g.strokeStyle = "#cfcfc6"; g.lineWidth = 1.5; g.stroke();
+        g.fillStyle = "#222"; g.font = `${m % 12 === 0 ? "bold " : ""}${Math.min(15, kw * 0.33)}px Segoe UI, Arial, sans-serif`;
+        g.fillText(NAMES[m % 12], k.x + k.w / 2, top + keysH - 12);
+        g.fillStyle = "#555"; g.font = `${Math.min(13, kw * 0.3)}px Segoe UI, Arial, sans-serif`;
+        g.fillText(LETTERS[m % 12], k.x + k.w / 2, top + keysH + 18);
+      }
+      for (let m = this.lo; m <= this.hi; m++) {
+        if (!isBlack(m)) continue;
+        const k = this.keys[m];
+        g.fillStyle = m === this.down ? COLORS.flash : "#c5c5bc";
+        roundRect(g, k.x, top - 1, k.w, keysH * 0.62 + 1, 4); g.fill();
+      }
+    }
+  }
+
+  // ---------- bow string (1.1.1): press with a finger, pluck the sounding part ----------
+  const STRING_BASE = 110; // an open string tuned to ля of the big octave, for the sake of the example
+  const STRING_MARKS = [[1, "вся струна", "исходный звук"], [3 / 4, "три четверти", "кварта выше"],
+                        [2 / 3, "две трети", "квинта выше"], [1 / 2, "половина", "октава выше"]];
+  class StringLab {
+    constructor(el) {
+      this.el = el;
+      this.part = 1; // sounding share of the string
+      this.tension = 1;
+      this.pluckedAt = null;
+      this.canvas = document.createElement("canvas");
+      this.g = this.canvas.getContext("2d");
+      const bar = document.createElement("div");
+      bar.className = "player-controls";
+      bar.innerHTML = STRING_MARKS.map(([, name], i) => `<button type="button" data-mark="${i}">${name}</button>`).join("") +
+        '<label>Натяжение <input type="range" min="50" max="200" step="5" value="100"> <span class="lab-ten">100</span> %</label>' +
+        '<span class="player-score lab-info"></span>';
+      el.append(this.canvas, bar);
+      this.info = bar.querySelector(".lab-info");
+      bar.querySelectorAll("[data-mark]").forEach((b) => b.addEventListener("click", () => { this.part = STRING_MARKS[b.dataset.mark][0]; this.pluck(); }));
+      const ten = bar.querySelector("input");
+      ten.addEventListener("input", () => { this.tension = ten.value / 100; bar.querySelector(".lab-ten").textContent = ten.value; this.update(); });
+      this.canvas.addEventListener("pointerdown", (ev) => {
+        const box = this.canvas.getBoundingClientRect();
+        const x = ev.clientX - box.left, y = ev.clientY - box.top;
+        if (y > this.y0 + 26 || y < this.y0 - 40) return;
+        // left of the finger presses it there; anywhere on the sounding part plucks
+        const pos = (x - this.x0) / this.len;
+        if (pos >= 0 && pos < 1 - this.part) { this.part = 1; this.update(); return; }
+        if (pos < 0 || pos > 1) return;
+        if (Math.abs(pos - (1 - this.part)) < 0.03 || ev.shiftKey) this.part = Math.max(0.2, 1 - pos);
+        this.pluck();
+      });
+      this.canvas.addEventListener("contextmenu", (ev) => ev.preventDefault());
+      this.resize();
+      window.addEventListener("resize", () => this.resize());
+    }
+    freq() { return (STRING_BASE * Math.sqrt(this.tension)) / this.part; }
+    resize() {
+      const w = this.el.clientWidth, h = 170;
+      const dpr = window.devicePixelRatio || 1;
+      this.canvas.width = w * dpr; this.canvas.height = h * dpr; this.canvas.style.height = h + "px";
+      this.g.setTransform(dpr, 0, 0, dpr, 0, 0);
+      this.w = w; this.h = h; this.x0 = 30; this.len = w - 60; this.y0 = 80;
+      this.update();
+    }
+    update() {
+      const f = this.freq();
+      const mark = STRING_MARKS.find(([share]) => Math.abs(share - this.part) < 0.005);
+      const semis = 12 * Math.log2(1 / this.part);
+      this.info.textContent = `звучит ${mark ? mark[1] : Math.round(this.part * 100) + " % струны"} — ${Math.round(f)} Гц, ` +
+        (mark ? mark[2] : `на ${semis.toFixed(1).replace(".", ",")} полутона выше`) +
+        (this.tension !== 1 ? `; натяжение ×${this.tension.toFixed(2).replace(".", ",")} поднимает звук в √${this.tension.toFixed(2).replace(".", ",")} раза` : "");
+      this.draw(0);
+    }
+    pluck() {
+      audio();
+      pluck(ctx.currentTime, this.freq(), 0.5);
+      this.update();
+      this.pluckedAt = performance.now();
+      const frame = () => {
+        const age = (performance.now() - this.pluckedAt) / 1000;
+        this.draw(age);
+        if (age < 2.5) requestAnimationFrame(frame);
+      };
+      requestAnimationFrame(frame);
+    }
+    draw(age) {
+      const g = this.g, { x0, len, y0 } = this;
+      g.fillStyle = COLORS.bg; g.fillRect(0, 0, this.w, this.h);
+      const fx = x0 + len * (1 - this.part);
+      // marks for the simple ratios
+      STRING_MARKS.slice(1).forEach(([share, name], i) => {
+        const x = x0 + len * (1 - share);
+        const labelY = i % 2 ? y0 - 40 : y0 + 44; // alternate above and below: 3/4 and 2/3 sit close together
+        g.strokeStyle = "#d8d8cf"; g.lineWidth = 1; g.setLineDash([3, 3]);
+        g.beginPath(); g.moveTo(x, y0 - 34); g.lineTo(x, y0 + 30); g.stroke(); g.setLineDash([]);
+        g.fillStyle = COLORS.muted; g.font = "10px Segoe UI, Arial, sans-serif"; g.textAlign = "center";
+        g.fillText(name, x, labelY);
+      });
+      // pegs, the silent part and the vibrating part
+      g.fillStyle = "#555"; g.fillRect(x0 - 8, y0 - 12, 8, 24); g.fillRect(x0 + len, y0 - 12, 8, 24);
+      g.strokeStyle = "#c9c9c0"; g.lineWidth = 3;
+      g.beginPath(); g.moveTo(x0, y0); g.lineTo(fx, y0); g.stroke();
+      const amp = this.pluckedAt ? 16 * Math.exp(-age / 0.8) : 0;
+      const seg = len * this.part;
+      for (let k = amp > 0.5 ? -3 : 0; k <= (amp > 0.5 ? 3 : 0); k++) {
+        g.strokeStyle = COLORS.right; g.globalAlpha = amp > 0.5 ? 0.25 : 1; g.lineWidth = 3;
+        g.beginPath();
+        for (let x = 0; x <= seg; x += 3) g.lineTo(fx + x, y0 + ((amp * k) / 3) * Math.sin((Math.PI * x) / seg));
+        g.stroke();
+      }
+      g.globalAlpha = 1;
+      if (this.part < 1) {
+        g.fillStyle = "#7eaee6"; g.strokeStyle = COLORS.right; g.lineWidth = 1.5;
+        g.beginPath(); g.arc(fx, y0 - 14, 9, 0, Math.PI * 2); g.fill(); g.stroke();
+      }
+      g.fillStyle = COLORS.muted; g.font = "11px Segoe UI, Arial, sans-serif"; g.textAlign = "left";
+      g.fillText("щёлкните по синей части, чтобы щипнуть; по серой — чтобы убрать палец; кнопки ставят палец в нужное место", 8, 16);
+    }
+  }
+
+  // ---------- bottles (1.1.1): tap the glass or blow across the neck ----------
+  // A simple model, not a measurement: blowing excites the air above the water (a Helmholtz resonator, f ∝ 1/√air);
+  // tapping excites the glass, which the water makes heavier (f falls as the water rises).
+  const BLOW_EMPTY = 180, TAP_EMPTY = 1400;
+  const blowFreq = (level) => BLOW_EMPTY / Math.sqrt(1 - level);
+  const tapFreq = (level) => TAP_EMPTY / Math.sqrt(1 + 2.5 * level);
+  class BottleLab {
+    constructor(el) {
+      this.el = el;
+      this.levels = [0.15, 0.3, 0.45, 0.6, 0.72, 0.85];
+      this.mode = "tap";
+      this.lit = null;
+      this.canvas = document.createElement("canvas");
+      this.g = this.canvas.getContext("2d");
+      const bar = document.createElement("div");
+      bar.className = "player-controls";
+      bar.innerHTML = '<span class="player-mode"><button type="button" data-m="tap" class="on">Стучать ложкой</button><button type="button" data-m="blow">Дуть</button></span>' +
+        '<button type="button" data-organ="1">Настроить орган: до ре ми фа соль ля</button><span class="player-score lab-info"></span>';
+      el.append(this.canvas, bar);
+      this.info = bar.querySelector(".lab-info");
+      bar.querySelectorAll("[data-m]").forEach((b) => b.addEventListener("click", () => {
+        bar.querySelectorAll("[data-m]").forEach((x) => x.classList.toggle("on", x === b));
+        this.mode = b.dataset.m; this.draw();
+      }));
+      bar.querySelector("[data-organ]").addEventListener("click", () => {
+        // levels at which blowing gives до, ре, ми, фа, соль, ля of the first octave
+        this.levels = [60, 62, 64, 65, 67, 69].map((m) => 1 - (BLOW_EMPTY / (440 * Math.pow(2, (m - 69) / 12))) ** 2);
+        this.mode = "blow";
+        bar.querySelectorAll("[data-m]").forEach((x) => x.classList.toggle("on", x.dataset.m === "blow"));
+        this.draw();
+      });
+      let drag = null;
+      this.canvas.addEventListener("pointerdown", (ev) => {
+        const box = this.canvas.getBoundingClientRect();
+        const i = this.bottleAt(ev.clientX - box.left);
+        if (i === undefined) return;
+        drag = { i, y: ev.clientY, moved: false };
+        this.canvas.setPointerCapture(ev.pointerId);
+      });
+      this.canvas.addEventListener("pointermove", (ev) => {
+        if (!drag) return;
+        if (Math.abs(ev.clientY - drag.y) > 5) drag.moved = true;
+        if (!drag.moved) return;
+        const box = this.canvas.getBoundingClientRect();
+        const { top, bh } = this.geom();
+        this.levels[drag.i] = Math.max(0.02, Math.min(0.92, 1 - (ev.clientY - box.top - top) / bh));
+        this.draw();
+      });
+      this.canvas.addEventListener("pointerup", () => { if (drag && !drag.moved) this.sound(drag.i); drag = null; });
+      this.resize();
+      window.addEventListener("resize", () => this.resize());
+    }
+    geom() {
+      const n = this.levels.length, bw = Math.min(60, (this.w - 40) / n - 14);
+      return { n, bw, gap: (this.w - n * bw) / (n + 1), top: 46, bh: this.h - 100 };
+    }
+    bottleAt(x) {
+      const { n, bw, gap } = this.geom();
+      for (let i = 0; i < n; i++) { const bx = gap + i * (bw + gap); if (x >= bx - 4 && x <= bx + bw + 4) return i; }
+      return undefined;
+    }
+    resize() {
+      const w = this.el.clientWidth, h = 240;
+      const dpr = window.devicePixelRatio || 1;
+      this.canvas.width = w * dpr; this.canvas.height = h * dpr; this.canvas.style.height = h + "px";
+      this.g.setTransform(dpr, 0, 0, dpr, 0, 0);
+      this.w = w; this.h = h;
+      this.draw();
+    }
+    sound(i) {
+      audio();
+      const t = ctx.currentTime, level = this.levels[i];
+      if (this.mode === "tap") {
+        const f = tapFreq(level);
+        tone(t, f, 0, 0.9, 0.25); tone(t, f * 2.76, 0, 0.35, 0.06); hiss(t, 0.01, 0.15, "highpass", 5000);
+        this.info.textContent = `стук: ≈ ${Math.round(f)} Гц — чем больше воды, тем ниже`;
+      } else {
+        const f = blowFreq(level);
+        tone(t, f, 0, 1.1, 0.3); hiss(t, 1.0, 0.06, "bandpass", f * 2);
+        this.info.textContent = `дуем: ≈ ${Math.round(f)} Гц — чем больше воды, тем выше`;
+      }
+      this.lit = { i, at: performance.now() };
+      this.draw();
+      setTimeout(() => this.draw(), 350);
+    }
+    draw() {
+      const g = this.g, { n, bw, gap, top, bh } = this.geom();
+      g.fillStyle = COLORS.bg; g.fillRect(0, 0, this.w, this.h);
+      g.fillStyle = COLORS.muted; g.font = "11px Segoe UI, Arial, sans-serif"; g.textAlign = "left";
+      g.fillText("щелчок по бутылке — звук; потяните вверх или вниз — меняется уровень воды", 8, 16);
+      const lit = this.lit && performance.now() - this.lit.at < 300 ? this.lit.i : -1;
+      this.levels.forEach((level, i) => {
+        const x = gap + i * (bw + gap);
+        g.fillStyle = i === lit ? "#fff3cc" : "#fff";
+        g.fillRect(x, top, bw, bh);
+        g.fillStyle = "#cfe0f7"; g.fillRect(x, top + bh * (1 - level), bw, bh * level);
+        g.strokeStyle = COLORS.right; g.lineWidth = 2;
+        g.beginPath();
+        g.moveTo(x + bw * 0.32, top - 26); g.lineTo(x + bw * 0.32, top); g.lineTo(x, top); g.lineTo(x, top + bh);
+        g.lineTo(x + bw, top + bh); g.lineTo(x + bw, top); g.lineTo(x + bw * 0.68, top); g.lineTo(x + bw * 0.68, top - 26);
+        g.stroke();
+        const f = this.mode === "tap" ? tapFreq(level) : blowFreq(level);
+        g.fillStyle = COLORS.text; g.textAlign = "center"; g.font = "bold 12px Segoe UI, Arial, sans-serif";
+        g.fillText(`${Math.round(f)} Гц`, x + bw / 2, top + bh + 18);
+        g.fillStyle = COLORS.muted; g.font = "11px Segoe UI, Arial, sans-serif";
+        g.fillText(`${Math.round(level * 100)} % воды`, x + bw / 2, top + bh + 34);
+      });
+    }
+  }
+
+  // ---------- pot and film (1.1.1): sound travels through the air and makes grains jump ----------
+  class PotLab {
+    constructor(el) {
+      this.el = el;
+      this.volume = 0.6;
+      this.events = []; // {at, strength}: when a sound left the pot
+      this.grains = Array.from({ length: 14 }, (_, i) => ({ x: (i + 0.5) / 14, h: 0, v: 0 }));
+      this.canvas = document.createElement("canvas");
+      this.g = this.canvas.getContext("2d");
+      const bar = document.createElement("div");
+      bar.className = "player-controls";
+      bar.innerHTML = '<button type="button" class="player-play" data-a="hit">Стукнуть по кастрюле</button>' +
+        '<button type="button" data-a="sing">Спеть «а-а-а»</button>' +
+        '<label>Громкость <input type="range" min="10" max="100" value="60"></label>';
+      el.append(this.canvas, bar);
+      bar.querySelector("[data-a=hit]").addEventListener("click", () => this.hit());
+      bar.querySelector("[data-a=sing]").addEventListener("click", () => this.sing());
+      const vol = bar.querySelector("input");
+      vol.addEventListener("input", () => (this.volume = vol.value / 100));
+      this.canvas.addEventListener("pointerdown", (ev) => {
+        const box = this.canvas.getBoundingClientRect();
+        if (ev.clientX - box.left < this.w * 0.3) this.hit();
+      });
+      this.resize();
+      window.addEventListener("resize", () => this.resize());
+      this.loop();
+    }
+    resize() {
+      const w = this.el.clientWidth, h = 200;
+      const dpr = window.devicePixelRatio || 1;
+      this.canvas.width = w * dpr; this.canvas.height = h * dpr; this.canvas.style.height = h + "px";
+      this.g.setTransform(dpr, 0, 0, dpr, 0, 0);
+      this.w = w; this.h = h;
+    }
+    hit() {
+      audio();
+      const t = ctx.currentTime, v = this.volume;
+      hiss(t, 0.4, 0.25 * v, "bandpass", 3000);
+      [523, 1187, 1879, 2790].forEach((f, i) => tone(t, f, 0, 1.2 - i * 0.2, (0.12 * v) / (i + 1)));
+      this.events.push({ at: performance.now(), strength: v });
+    }
+    sing() {
+      audio();
+      const t = ctx.currentTime, v = this.volume;
+      const o = ctx.createOscillator(), lfo = ctx.createOscillator(), lg = ctx.createGain(), f = ctx.createBiquadFilter();
+      o.type = "sawtooth"; o.frequency.value = 220; lfo.frequency.value = 5; lg.gain.value = 3;
+      lfo.connect(lg); lg.connect(o.frequency);
+      f.type = "bandpass"; f.frequency.value = 800; f.Q.value = 1.5; // a rough "а" vowel
+      o.connect(f); f.connect(envGain(t, 0.3 * v, 1.6));
+      o.start(t); lfo.start(t); o.stop(t + 1.7); lfo.stop(t + 1.7);
+      for (let k = 0; k < 6; k++) this.events.push({ at: performance.now() + k * 250, strength: v * 0.6 });
+    }
+    loop() {
+      const now = performance.now();
+      const travel = 700; // ms on screen for the trip from pot to bowl: slowed down, really ~1 ms
+      this.events.forEach((e) => {
+        if (!e.done && now - e.at >= travel) {
+          e.done = true;
+          this.grains.forEach((gr) => (gr.v = Math.max(gr.v, e.strength * (50 + Math.random() * 40))));
+        }
+      });
+      this.events = this.events.filter((e) => now - e.at < travel + 200);
+      this.grains.forEach((gr) => { gr.h = Math.max(0, gr.h + gr.v * 0.06); gr.v = gr.h > 0 || gr.v > 0 ? gr.v - 9.8 * 0.35 : 0; if (gr.h === 0 && gr.v < 0) gr.v = 0; });
+      this.draw(now, travel);
+      requestAnimationFrame(() => this.loop());
+    }
+    draw(now, travel) {
+      const g = this.g, w = this.w, h = this.h;
+      g.fillStyle = COLORS.bg; g.fillRect(0, 0, w, h);
+      // pot
+      const px = w * 0.06, pw = w * 0.2, py = h * 0.4, ph = h * 0.36;
+      g.fillStyle = "#f6f6f2"; g.strokeStyle = "#555"; g.lineWidth = 2;
+      roundRect(g, px, py, pw, ph, 8); g.fill(); g.stroke();
+      g.fillStyle = COLORS.text; g.font = "bold 12px Segoe UI, Arial, sans-serif"; g.textAlign = "center";
+      g.fillText("кастрюля", px + pw / 2, py + ph / 2 + 4);
+      // waves in flight
+      const bx0 = w * 0.62, bx1 = w * 0.94, film = h * 0.55;
+      this.events.forEach((e) => {
+        const k = (now - e.at) / travel;
+        if (k < 0 || k > 1) return;
+        const x = px + pw + k * (bx0 - px - pw);
+        g.strokeStyle = COLORS.right; g.globalAlpha = 0.3 + 0.7 * e.strength; g.lineWidth = 2.5;
+        g.beginPath(); g.arc(x - 30, h * 0.55, 34, -0.7, 0.7); g.stroke(); g.globalAlpha = 1;
+      });
+      // bowl, film and grains
+      g.fillStyle = "#f6f6f2"; g.strokeStyle = "#555"; g.lineWidth = 2;
+      g.beginPath(); g.moveTo(bx0, film); g.quadraticCurveTo(bx0, h * 0.9, (bx0 + bx1) / 2, h * 0.9);
+      g.quadraticCurveTo(bx1, h * 0.9, bx1, film); g.closePath(); g.fill(); g.stroke();
+      g.strokeStyle = COLORS.right; g.lineWidth = 3;
+      g.beginPath(); g.moveTo(bx0 - 6, film); g.lineTo(bx1 + 6, film); g.stroke();
+      g.fillStyle = COLORS.right;
+      this.grains.forEach((gr) => { g.beginPath(); g.arc(bx0 + gr.x * (bx1 - bx0), film - 4 - gr.h, 3, 0, Math.PI * 2); g.fill(); });
+      g.fillStyle = COLORS.muted; g.font = "11px Segoe UI, Arial, sans-serif"; g.textAlign = "center";
+      g.fillText("миска с плёнкой и крупой", (bx0 + bx1) / 2, h - 6);
+      g.textAlign = "left";
+      g.fillText("полёт волны показан замедленно: на самом деле звук пролетает полметра за полторы тысячных секунды", 8, 16);
+    }
+  }
+
   // Keys and MIDI go to the player last started or touched.
   let activePlayer = null;
   document.addEventListener("keydown", (ev) => {
@@ -1265,6 +1677,10 @@
     document.querySelectorAll(".lab[data-lab=intervals]").forEach((el) => el._lab || (el._lab = new IntervalLab(el)));
     document.querySelectorAll(".lab[data-lab=ear]").forEach((el) => el._lab || (el._lab = new EarLab(el)));
     document.querySelectorAll(".lab[data-lab=chords]").forEach((el) => el._lab || (el._lab = new ChordLab(el)));
+    document.querySelectorAll(".lab[data-lab=keyboard]").forEach((el) => el._lab || (el._lab = new KeyboardLab(el)));
+    document.querySelectorAll(".lab[data-lab=string]").forEach((el) => el._lab || (el._lab = new StringLab(el)));
+    document.querySelectorAll(".lab[data-lab=bottles]").forEach((el) => el._lab || (el._lab = new BottleLab(el)));
+    document.querySelectorAll(".lab[data-lab=pot]").forEach((el) => el._lab || (el._lab = new PotLab(el)));
     document.querySelectorAll(".player").forEach((el) => {
       if (el._player) return;
       try {

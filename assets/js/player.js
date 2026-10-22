@@ -800,6 +800,23 @@
     }
   }
 
+  // Brackets under the white keys of each octave, labelled with its Russian name (как на схеме клавиатуры в 1.2).
+  const OCTAVE_NAMES = ["", "контроктава", "большая октава", "малая октава", "первая октава", "вторая октава", "третья октава", "четвёртая октава", "пятая октава"];
+  function octaveBrackets(g, keys, lo, hi, y) {
+    for (let o = Math.floor(lo / 12); o <= Math.floor(hi / 12); o++) {
+      const whites = [];
+      for (let m = Math.max(lo, o * 12); m <= Math.min(hi, o * 12 + 11); m++) if (!isBlack(m)) whites.push(keys[m]);
+      if (!whites.length) continue;
+      const x1 = whites[0].x + 3, x2 = whites[whites.length - 1].x + whites[whites.length - 1].w - 3;
+      g.strokeStyle = "#b8b8ae"; g.lineWidth = 1.2;
+      g.beginPath(); g.moveTo(x1, y - 5); g.lineTo(x1, y); g.lineTo(x2, y); g.lineTo(x2, y - 5); g.stroke();
+      const name = OCTAVE_NAMES[o - 1] || "";
+      g.fillStyle = COLORS.muted; g.textAlign = "center";
+      g.font = `${whites.length > 2 ? 11 : 9}px Segoe UI, Arial, sans-serif`;
+      g.fillText(whites.length > 2 ? name : name.replace(" октава", ""), (x1 + x2) / 2, y + 13);
+    }
+  }
+
   function plural(n, one, few, many) {
     if (n % 1) return few;
     const d = n % 10, dd = n % 100;
@@ -888,12 +905,13 @@
       // Drag the ruler sideways to push it out over the edge or back onto the table; a short click flicks it.
       let press = null;
       this.canvas.addEventListener("pointerdown", (ev) => {
-        press = { x: ev.clientX, free: this.free, moved: false };
+        if (press) return; // the ruler follows one finger; extra touches are ignored
+        press = { id: ev.pointerId, x: ev.clientX, free: this.free, moved: false };
         this.canvas.setPointerCapture(ev.pointerId);
         ev.preventDefault();
       });
       this.canvas.addEventListener("pointermove", (ev) => {
-        if (!press) return;
+        if (!press || ev.pointerId !== press.id) return;
         const dx = ev.clientX - press.x;
         if (!press.moved && Math.abs(dx) > 4) press.moved = true;
         if (!press.moved) return;
@@ -903,7 +921,11 @@
         free = near && Math.abs(near.cm - free) < 0.3 ? near.cm : Math.round(free * 10) / 10; // snap to a note within 3 mm
         if (free !== this.free) { this.free = free; this.pluckedAt = null; this.update(); }
       });
-      const end = () => { if (press && !press.moved) this.pluck(); press = null; };
+      const end = (ev) => {
+        if (!press || ev.pointerId !== press.id) return;
+        if (!press.moved) this.pluck();
+        press = null;
+      };
       ["pointerup", "pointercancel"].forEach((e) => this.canvas.addEventListener(e, end));
       this.resize();
       window.addEventListener("resize", () => this.resize());
@@ -1050,43 +1072,45 @@
 
     // The first two bending modes of a clamped ruler, in slow motion: the second bends as an S around a node
     // that stays still, about 0.78 of the free length from the edge, and moves 6.27 times as often.
+    // The first three bending modes of a clamped ruler, in slow motion. A clamped–free beam allows only shapes with
+    // βL = 1.875, 4.694, 7.855, 10.996…; frequency grows as (βL)², hence 1 : 6.27 : 17.5 : 34.4 : 56.8 — not whole
+    // numbers, unlike a string (1 : 2 : 3 …), which is why a ruler buzzes rather than sounds a clean note.
     drawModes(top) {
       const g = this.g, w = this.w, f = this.freq();
       g.strokeStyle = COLORS.line; g.lineWidth = 1;
       g.beginPath(); g.moveTo(0, top + 0.5); g.lineTo(w, top + 0.5); g.stroke();
       const now = performance.now() / 1000;
-      const panels = [[1, `1-й изгиб: качается целиком — ${hz(f)} Гц`, 0.4],
-                      [2, `2-й изгиб: гнётся волной, в 6,3 раза чаще — ${hz(f * SECOND_MODE)} Гц`, 0.4 * SECOND_MODE]];
-      const half = w / 2;
-      panels.forEach(([n, title, visHz], i) => {
-        const x0 = 16 + i * half, len = half - 40, y = top + 70;
-        g.fillStyle = COLORS.text; g.font = `bold ${Math.min(12, w / 55)}px Segoe UI, Arial, sans-serif`; g.textAlign = "left";
-        g.fillText(title, x0, top + 20);
-        g.fillStyle = "#f6f6f2"; g.strokeStyle = COLORS.line; g.fillRect(x0, y - 14, 10, 28); g.strokeRect(x0, y - 14, 10, 28);
+      const panels = [[1, "1-й: целиком", 1, []], [2, "2-й: волной", 6.27, [0.7834]], [3, "3-й: двумя волнами", 17.55, [0.5035, 0.8677]]];
+      const third = w / 3;
+      panels.forEach(([n, title, ratio, nodes], i) => {
+        const x0 = 12 + i * third, len = third - 34, y = top + 64;
+        g.fillStyle = COLORS.text; g.font = `bold ${Math.min(12, w / 70)}px Segoe UI, Arial, sans-serif`; g.textAlign = "left";
+        g.fillText(`${title} — ${hz(f * ratio)} Гц`, x0, top + 18);
+        g.fillStyle = COLORS.muted; g.font = "11px Segoe UI, Arial, sans-serif";
+        g.fillText(n === 1 ? "основное качание" : `в ${String(ratio).replace(".", ",")} раза чаще первого`, x0, top + 32);
+        g.fillStyle = "#f6f6f2"; g.strokeStyle = COLORS.line; g.fillRect(x0, y - 14, 8, 28); g.strokeRect(x0, y - 14, 8, 28);
         const shapeAt = (s) => cantilever(n, s) / cantilever(n, 1);
         const line = (k, alpha, width) => {
           g.globalAlpha = alpha; g.strokeStyle = this.mat.color; g.lineWidth = width;
           g.beginPath();
-          for (let s = 0; s <= 1.0001; s += 0.02) g.lineTo(x0 + 10 + s * len, y - 26 * k * shapeAt(s));
+          for (let s = 0; s <= 1.0001; s += 0.02) g.lineTo(x0 + 8 + s * len, y - 22 * k * shapeAt(s));
           g.stroke(); g.globalAlpha = 1;
         };
         line(1, 0.15, 3); line(-1, 0.15, 3);
-        line(Math.sin(2 * Math.PI * visHz * now), 1, 4);
-        if (n === 2) {
-          const nx = x0 + 10 + 0.7834 * len;
-          g.fillStyle = COLORS.bad; g.beginPath(); g.arc(nx, y, 4, 0, Math.PI * 2); g.fill();
-          g.font = "11px Segoe UI, Arial, sans-serif"; g.textAlign = "center";
-          g.fillText("неподвижная точка", nx, y + 40);
-        }
+        line(Math.sin(2 * Math.PI * 0.4 * Math.sqrt(ratio) * now), 1, 3.5);
+        nodes.forEach((s) => {
+          g.fillStyle = COLORS.bad; g.beginPath(); g.arc(x0 + 8 + s * len, y, 3.5, 0, Math.PI * 2); g.fill();
+        });
       });
       g.fillStyle = COLORS.muted; g.font = "11px Segoe UI, Arial, sans-serif"; g.textAlign = "left";
-      g.fillText("показано замедленно; настоящая линейка делает оба движения одновременно, и мы слышим их сумму", 16, top + 132);
+      g.fillText("красные точки не двигаются. Дальше — 4-й изгиб в 34,4 раза чаще, 5-й в 56,8… Числа нецелые, поэтому линейка", 12, top + 110);
+      g.fillText("не звучит чистой нотой, а гудит и дребезжит; у струны такие колебания идут ровно в 2, 3, 4 раза чаще. Показано замедленно.", 12, top + 124);
     }
   }
 
   // Mode shapes of a clamped–free beam (Euler–Bernoulli): s is the share of the free length from the clamp.
   function cantilever(n, s) {
-    const [b, sigma] = n === 1 ? [1.875104, 0.734096] : [4.694091, 1.018467];
+    const [b, sigma] = [[1.875104, 0.734096], [4.694091, 1.018467], [7.854757, 0.999224]][n - 1];
     const x = b * s;
     return Math.cosh(x) - Math.cos(x) - sigma * (Math.sinh(x) - Math.sin(x));
   }
@@ -1133,7 +1157,7 @@
       holdable(this.canvas, (x, y) => {
         const m = ChordLab.prototype.keyAt.call(this, x, y);
         if (m === undefined) return;
-        this.pc = m % 12;
+        this.pc = m; // 0…12: 12 is до of the next octave
         this.down = m;
         this.freq = null;
         this.draw();
@@ -1153,7 +1177,7 @@
       this.canvas.width = w * dpr; this.canvas.height = h * dpr; this.canvas.style.height = h + "px";
       this.g.setTransform(dpr, 0, 0, dpr, 0, 0);
       this.w = w; this.h = h;
-      this.lo = 0; this.hi = 11;
+      this.lo = 0; this.hi = 12;
       ChordLab.prototype.layout.call(this);
       this.top = Math.round(h * 0.38); this.keysH = h - this.top - 6;
       this.draw();
@@ -1190,18 +1214,25 @@
       // one octave of keys with their frequencies
       const { top, keysH, kw } = this;
       g.textAlign = "center";
-      for (let m = 0; m <= 11; m++) {
+      for (let m = 0; m <= 12; m++) {
         if (isBlack(m)) continue;
         const k = this.keys[m], on = m === this.pc;
-        g.fillStyle = m === this.down ? COLORS.flash : on ? "#e3eaf7" : "#fff";
+        g.fillStyle = m === this.down ? COLORS.flash : on ? "#e3eaf7" : m === 12 ? "#f1f1ea" : "#fff";
         roundRect(g, k.x + 1, top, k.w - 2, keysH, 6); g.fill();
         g.strokeStyle = on ? COLORS.right : "#cfcfc6"; g.lineWidth = on ? 2.5 : 1.5; g.stroke();
         g.fillStyle = "#222"; g.font = `${on ? "bold " : ""}${Math.min(15, kw * 0.22)}px Segoe UI, Arial, sans-serif`;
-        g.fillText(NAMES[m], k.x + k.w / 2, top + keysH - 30);
+        g.fillText(NAMES[m % 12], k.x + k.w / 2, top + keysH - 30);
+        if (m === 12) {
+          g.fillStyle = COLORS.muted; g.font = `${Math.min(10, kw * 0.15)}px Segoe UI, Arial, sans-serif`;
+          g.fillText("следующая", k.x + k.w / 2, top + keysH * 0.68);
+          g.fillText("октава", k.x + k.w / 2, top + keysH * 0.68 + 12);
+          g.strokeStyle = COLORS.right; g.lineWidth = 2; g.setLineDash([4, 3]);
+          g.beginPath(); g.moveTo(k.x, top - 4); g.lineTo(k.x, top + keysH + 4); g.stroke(); g.setLineDash([]);
+        }
         g.fillStyle = COLORS.muted; g.font = `${Math.min(12, kw * 0.18)}px Segoe UI, Arial, sans-serif`;
         g.fillText(`${hz(this.noteFreq(m, this.oct))} Гц`, k.x + k.w / 2, top + keysH - 12);
       }
-      for (let m = 0; m <= 11; m++) {
+      for (let m = 0; m <= 12; m++) {
         if (!isBlack(m)) continue;
         const k = this.keys[m], on = m === this.pc;
         g.fillStyle = m === this.down ? COLORS.flash : on ? COLORS.right : "#c5c5bc";
@@ -1211,10 +1242,14 @@
         g.fillText(hz(this.noteFreq(m, this.oct)), k.x + k.w / 2, top + keysH * 0.6 - 8);
       }
       if (this.freq) { this.info.textContent = this.text; return; }
-      const [, gen, sci] = OCTAVES[this.oct];
-      const lower = this.oct > 0 ? `${hz(f / 2)} Гц октавой ниже` : "";
-      const upper = this.oct < OCTAVES.length - 1 ? `${hz(f * 2)} Гц октавой выше` : "";
-      this.info.textContent = `${NAMES[this.pc]} ${gen} (${LETTERS[this.pc]}${sci}) — ${hz(f)} Гц; ` + [lower, upper].filter(Boolean).join(", ");
+      const next = this.pc === 12;
+      const octIdx = this.oct + (next ? 1 : 0);
+      const [, gen, sci] = OCTAVES[Math.min(octIdx, OCTAVES.length - 1)];
+      const genText = octIdx < OCTAVES.length ? gen : "следующей октавы";
+      const lower = `${hz(f / 2)} Гц октавой ниже`;
+      const upper = `${hz(f * 2)} Гц октавой выше`;
+      this.info.textContent = `${NAMES[this.pc % 12]} ${genText} (${LETTERS[this.pc % 12]}${octIdx < OCTAVES.length ? sci : OCTAVES[OCTAVES.length - 1][2] + 1})` +
+        (next ? ", уже из следующей октавы" : "") + ` — ${hz(f)} Гц; ${lower}, ${upper}`;
     }
   }
 
@@ -1237,6 +1272,9 @@
       g.fillStyle = pressed.includes(m) ? COLORS.right : "#8f8f86";
       g.fillRect(x + (after + 1) * kw - kw * 0.3, y, kw * 0.6, h * 0.6);
     });
+    // the eighth key is до of the next octave
+    g.strokeStyle = COLORS.right; g.lineWidth = 1.5;
+    g.beginPath(); g.moveTo(x + 7 * kw, y - 2); g.lineTo(x + 7 * kw, y + h + 2); g.stroke();
   }
   const DO4 = 261.63;
 
@@ -1447,7 +1485,7 @@
     constructor(el) {
       this.el = el;
       howto(el, "Как играть: щёлкайте по клавишам, чтобы выбрать ноты, затем нажмите и держите «Вместе». Готовые созвучия — кнопки внизу.");
-      this.lo = 60; this.hi = 83; // до4 … си5
+      this.lo = 60; this.hi = 84; // до4 … до6
       this.chosen = new Set([60, 64, 67]);
       this.lit = new Map();
       this.canvas = document.createElement("canvas");
@@ -1482,12 +1520,13 @@
     }
 
     resize() {
-      const w = this.el.clientWidth, h = Math.round(Math.min(190, w * 0.32));
+      const w = this.el.clientWidth, h = Math.round(Math.min(190, w * 0.32)) + 24;
       const dpr = window.devicePixelRatio || 1;
       this.canvas.width = w * dpr; this.canvas.height = h * dpr; this.canvas.style.height = h + "px";
       this.g.setTransform(dpr, 0, 0, dpr, 0, 0);
       this.w = w; this.h = h;
       this.layout();
+      this.keysH -= 24; // room for the octave brackets
       this.draw();
     }
 
@@ -1553,8 +1592,9 @@
         g.fillStyle = fill(m, "#c5c5bc");
         roundRect(g, k.x, top - 1, k.w, keysH * 0.62 + 1, 4); g.fill();
       }
+      octaveBrackets(g, this.keys, this.lo, this.hi, top + keysH + 8);
       const notes = [...this.chosen].sort((a, b) => a - b);
-      const names = notes.map((m) => NAMES[m % 12]).join(" + ");
+      const names = notes.map((m, i) => NAMES[m % 12] + (i && m - notes[0] >= 12 ? " (октавой выше)" : "")).join(" + ");
       const steps = notes.slice(1).map((m, i) => m - notes[i]);
       const name = chordName(steps);
       this.info.textContent = !notes.length ? "щёлкайте по клавишам, чтобы выбрать ноты" :
@@ -1584,13 +1624,13 @@
       window.addEventListener("resize", () => this.resize());
     }
     resize() {
-      const w = this.el.clientWidth, h = Math.round(Math.min(210, w * 0.34));
+      const w = this.el.clientWidth, h = Math.round(Math.min(210, w * 0.34)) + 24;
       const dpr = window.devicePixelRatio || 1;
       this.canvas.width = w * dpr; this.canvas.height = h * dpr; this.canvas.style.height = h + "px";
       this.g.setTransform(dpr, 0, 0, dpr, 0, 0);
       this.w = w; this.h = h;
       ChordLab.prototype.layout.call(this);
-      this.keysH = this.h - 34;
+      this.keysH = this.h - 58;
       this.draw();
     }
     draw() {
@@ -1614,6 +1654,7 @@
         g.fillStyle = m === this.down ? COLORS.flash : "#c5c5bc";
         roundRect(g, k.x, top - 1, k.w, keysH * 0.62 + 1, 4); g.fill();
       }
+      octaveBrackets(g, this.keys, this.lo, this.hi, top + keysH + 32);
     }
   }
 
@@ -1662,7 +1703,7 @@
       const bar = document.createElement("div");
       bar.className = "player-controls";
       bar.innerHTML = '<span class="player-mode"><button type="button" data-o="1" class="on">1-я октава</button><button type="button" data-o="2">2-я октава</button></span>' +
-        STRING_MARKS.map(([, name], i) => `<button type="button" data-mark="${i}">${name}</button>`).join("") +
+        STRING_MARKS.map(([, name], i) => `<button type="button" data-mark="${i}"${i === 12 ? ' title="до следующей октавы"' : ""}>${i === 12 ? "до ↑" : name}</button>`).join("") +
         '<label>Натяжение <input type="range" min="50" max="200" step="5" value="100"> <span class="lab-ten">100</span> %</label>' +
         '<span class="player-score lab-info"></span>';
       el.append(this.canvas, bar);
@@ -1680,7 +1721,7 @@
       ten.addEventListener("input", () => { this.tension = ten.value / 100; bar.querySelector(".lab-ten").textContent = ten.value; this.update(); });
       // Drag the finger along the string (it snaps to the simple ratios; at the edge the whole string sounds);
       // a short click anywhere on the string plucks it.
-      let press = null;
+      const presses = new Map(); // pointerId → press: one finger can hold the finger-dot while another plucks
       const posAt = (ev) => (ev.clientX - this.canvas.getBoundingClientRect().left - this.x0) / this.len;
       const setFinger = (pos) => {
         let part = Math.max(0.25, Math.min(1, 1 - pos));
@@ -1694,20 +1735,22 @@
         if (y > this.y0 + 30 || y < this.y0 - 36) return;
         const pos = posAt(ev);
         if (pos < -0.02 || pos > 1.02) return;
-        const onFinger = Math.abs(pos - (1 - this.part)) * this.len < 18;
-        press = { x: ev.clientX, pos, onFinger, moved: false };
+        const onFinger = Math.abs(pos - (1 - this.part)) * this.len < 18 && ![...presses.values()].some((q) => q.onFinger);
+        presses.set(ev.pointerId, { x: ev.clientX, pos, onFinger, moved: false });
         this.canvas.setPointerCapture(ev.pointerId);
         ev.preventDefault();
       });
       this.canvas.addEventListener("pointermove", (ev) => {
-        if (!press) return;
+        const press = presses.get(ev.pointerId);
+        if (!press || !press.onFinger) return; // only the finger-dot is dragged; other touches are plucks
         if (!press.moved && Math.abs(ev.clientX - press.x) > 4) press.moved = true;
         if (press.moved) setFinger(posAt(ev));
       });
-      const end = () => {
+      const end = (ev) => {
+        const press = presses.get(ev.pointerId);
         if (!press) return;
-        if (!press.moved && !press.onFinger) this.pluck();
-        press = null;
+        presses.delete(ev.pointerId);
+        if (!press.onFinger) this.pluck();
       };
       ["pointerup", "pointercancel"].forEach((e) => this.canvas.addEventListener(e, end));
       this.canvas.addEventListener("contextmenu", (ev) => ev.preventDefault());
@@ -1716,7 +1759,7 @@
     }
     freq() { return (STRING_BASE * Math.sqrt(this.tension)) / this.part; }
     resize() {
-      const w = this.el.clientWidth, h = 206;
+      const w = this.el.clientWidth, h = 222;
       const dpr = window.devicePixelRatio || 1;
       this.canvas.width = w * dpr; this.canvas.height = h * dpr; this.canvas.style.height = h + "px";
       this.g.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -1774,6 +1817,14 @@
         g.fillStyle = COLORS.muted; g.font = "10px Segoe UI, Arial, sans-serif";
         g.fillText(frac, x + (share === 1 ? 10 : 0), sharp ? labelY - 12 : labelY + 13);
       });
+      // the two octaves of marks, as brackets under the labels
+      [[0, 0.5, "1-я октава: от всей струны до половины"], [0.5, 0.75, "2-я октава: от половины до четверти"]].forEach(([a, b, label]) => {
+        const xa = x0 + len * a + 2, xb = x0 + len * b - 2, y = y0 + 106;
+        g.strokeStyle = "#b8b8ae"; g.lineWidth = 1.2;
+        g.beginPath(); g.moveTo(xa, y - 5); g.lineTo(xa, y); g.lineTo(xb, y); g.lineTo(xb, y - 5); g.stroke();
+        g.fillStyle = COLORS.muted; g.font = "11px Segoe UI, Arial, sans-serif"; g.textAlign = "center";
+        g.fillText(label, (xa + xb) / 2, y + 14);
+      });
       // pegs, the silent part and the vibrating part
       g.fillStyle = "#555"; g.fillRect(x0 - 8, y0 - 12, 8, 24); g.fillRect(x0 + len, y0 - 12, 8, 24);
       g.strokeStyle = "#c9c9c0"; g.lineWidth = 3;
@@ -1798,67 +1849,63 @@
 
   // ---------- bottles (1.1.1): tap the glass or blow across the neck ----------
   // A simple model, not a measurement: blowing excites the air above the water (a Helmholtz resonator, f ∝ 1/√air);
-  // tapping excites the glass, which the water makes heavier (f falls as the water rises).
-  const BLOW_EMPTY = 180, TAP_EMPTY = 1400;
+  // tapping excites the glass, which the water makes heavier (f falls as the water rises, here by about an octave).
+  const BLOW_EMPTY = 180, TAP_EMPTY = 1150, TAP_WATER = 4.8;
   const blowFreq = (level) => BLOW_EMPTY / Math.sqrt(1 - level);
-  const tapFreq = (level) => TAP_EMPTY / Math.sqrt(1 + 2.5 * level);
-  const BOTTLES_START = [0.15, 0.29, 0.43, 0.57, 0.71, 0.85]; // an even staircase of water, not a scale
+  const tapFreq = (level) => TAP_EMPTY / Math.sqrt(1 + TAP_WATER * level);
+  const levelFor = (mode, f) => (mode === "blow" ? 1 - (BLOW_EMPTY / f) ** 2 : ((TAP_EMPTY / f) ** 2 - 1) / TAP_WATER);
+  const BOTTLES_START = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8]; // an even staircase of water, not a scale
   // The nearest note to a frequency, with "≈" when it is more than 10 cents off.
   function nearestNote(f) {
     const exact = 69 + 12 * Math.log2(f / 440), m = Math.round(exact);
     return (Math.abs(exact - m) * 100 > 10 ? "≈ " : "") + NAMES[((m % 12) + 12) % 12];
   }
+  const sciName = (f) => { const m = Math.round(69 + 12 * Math.log2(f / 440)); return LETTERS[m % 12] + (Math.floor(m / 12) - 1); };
 
   // Water levels (2–92 %) at which a bottle sounds a white note, for blowing or for tapping.
   function bottleNoteLevels(mode) {
     const out = [];
     for (let m = 36; m <= 96; m++) {
       if (isBlack(m)) continue;
-      const f = midiFreq(m);
-      const level = mode === "blow" ? 1 - (BLOW_EMPTY / f) ** 2 : ((TAP_EMPTY / f) ** 2 - 1) / 2.5;
+      const level = levelFor(mode, midiFreq(m));
       if (level >= 0.02 && level <= 0.92) out.push({ level, m });
     }
     return out;
   }
 
-  // Notes the organ is tuned to: blowing covers до–ля of the first octave; tapping only reaches соль₅–фа₆.
-  const BOTTLE_ORGAN = { blow: [60, 62, 64, 65, 67, 69], tap: [79, 81, 83, 84, 86, 88] };
+  // The organ: like the pipes of an organ, each bottle is tuned to one note, eight of them make the scale до…до.
+  // Blowing: до of the first octave to до of the second; tapping sounds an octave higher: до of the second to the third.
+  const BOTTLE_ORGAN = { blow: [60, 62, 64, 65, 67, 69, 71, 72], tap: [72, 74, 76, 77, 79, 81, 83, 84] };
 
   class BottleLab {
     constructor(el) {
       this.el = el;
-      howto(el, "Как играть: щёлкните по бутылке — она зазвучит, в режиме «Дуть» — пока держите. Потяните бутылку вверх или вниз — изменится уровень воды.");
+      howto(el, "Как играть: щёлкните по бутылке — она зазвучит, в режиме «Дуть» — пока держите; можно несколькими пальцами. Потяните бутылку вверх или вниз — изменится уровень воды.");
       this.levels = [...BOTTLES_START];
       this.mode = "tap";
-      this.lit = null;
+      this.lit = new Map(); // bottle → time it lit up (Infinity while blown)
       this.canvas = document.createElement("canvas");
       this.canvas.style.touchAction = "none";
       this.g = this.canvas.getContext("2d");
       const bar = document.createElement("div");
       bar.className = "player-controls";
       bar.innerHTML = '<span class="player-mode"><button type="button" data-m="tap" class="on">Стучать ложкой</button><button type="button" data-m="blow">Дуть</button></span>' +
-        '<button type="button" data-organ="1"></button>' +
+        '<button type="button" data-organ="1">Настроить как орган: до ре ми фа соль ля си до</button>' +
         '<button type="button" data-reset="1">Вернуть как было</button><span class="player-score lab-info"></span>';
       el.append(this.canvas, bar);
       this.info = bar.querySelector(".lab-info");
       bar.querySelectorAll("[data-m]").forEach((b) => b.addEventListener("click", () => {
         bar.querySelectorAll("[data-m]").forEach((x) => x.classList.toggle("on", x === b));
-        this.mode = b.dataset.m; this.organLabel(); this.draw();
+        this.mode = b.dataset.m; this.draw();
       }));
-      this.organButton = bar.querySelector("[data-organ]");
-      this.organLabel();
       // The organ is tuned for the current mode; the mode itself is left alone.
       bar.querySelector("[data-organ]").addEventListener("click", () => {
-        const notes = BOTTLE_ORGAN[this.mode];
-        this.levels = notes.map((m) => {
-          const f = midiFreq(m);
-          return this.mode === "blow" ? 1 - (BLOW_EMPTY / f) ** 2 : ((TAP_EMPTY / f) ** 2 - 1) / 2.5;
-        });
-        this.info.textContent = this.mode === "blow"
-          ? "Вода подобрана так, чтобы при выдувании звучали до, ре, ми, фа, соль, ля. Уровни идут неровно: чем выше нота, " +
-            "тем меньше воды нужно доливать. Переключитесь на «Стучать» — эти же бутылки зазвучат в обратном порядке и уже не гаммой."
-          : "При стуке бутылки звучат высоко и в узком диапазоне, примерно 790–1400 Гц: гамма от до туда не помещается. " +
-            "Поэтому орган собран из соль, ля, си, до, ре, ми — от соль второй октавы до ми третьей. Чем выше нота, тем меньше воды.";
+        this.levels = BOTTLE_ORGAN[this.mode].map((m) => levelFor(this.mode, midiFreq(m)));
+        this.info.textContent = "У органа каждая труба звучит одной нотой, а мелодию играют на наборе труб, настроенных по гамме. " +
+          "Здесь трубы — бутылки: вода подобрана так, что они дают до, ре, ми, фа, соль, ля, си и до следующей октавы" +
+          (this.mode === "blow" ? " (от до первой октавы). Уровни идут неровно: чем выше нота, тем меньше воды нужно доливать."
+                                : " (при стуке на октаву выше — от до второй октавы). Чем выше нота, тем меньше воды.") +
+          " Настройка — для текущего режима: в другом бутылки зазвучат иначе.";
         this.draw();
       });
       bar.querySelector("[data-reset]").addEventListener("click", () => {
@@ -1867,16 +1914,19 @@
           "и в ноты не попадают — поэтому под бутылками «≈».";
         this.draw();
       });
-      let drag = null;
+      // every finger works its own bottle: a tap knocks, a hold blows, a vertical drag pours
+      const drags = new Map();
       this.canvas.addEventListener("pointerdown", (ev) => {
         const box = this.canvas.getBoundingClientRect();
         const i = this.bottleAt(ev.clientX - box.left);
         if (i === undefined) return;
-        drag = { i, y: ev.clientY, moved: false };
+        const drag = { i, y: ev.clientY, moved: false };
+        drags.set(ev.pointerId, drag);
         this.canvas.setPointerCapture(ev.pointerId);
         if (this.mode === "blow") { audio(); drag.stop = this.blow(i); }
       });
       this.canvas.addEventListener("pointermove", (ev) => {
+        const drag = drags.get(ev.pointerId);
         if (!drag) return;
         if (Math.abs(ev.clientY - drag.y) > 5 && !drag.moved) {
           drag.moved = true;
@@ -1888,34 +1938,33 @@
         let level = Math.max(0.02, Math.min(0.92, 1 - (ev.clientY - box.top - top) / bh));
         const marks = bottleNoteLevels(this.mode);
         const near = marks.reduce((a, b) => (Math.abs(b.level - level) < Math.abs(a.level - level) ? b : a));
-        if (Math.abs(near.level - level) < 0.025) level = near.level; // snap to a note
+        if (Math.abs(near.level - level) < 0.02) level = near.level; // snap to a note
         this.levels[drag.i] = level;
         this.draw();
       });
-      const end = () => {
-        if (drag && drag.stop) drag.stop();
-        else if (drag && !drag.moved && this.mode === "tap") this.sound(drag.i);
-        drag = null;
+      const end = (ev) => {
+        const drag = drags.get(ev.pointerId);
+        if (!drag) return;
+        drags.delete(ev.pointerId);
+        if (drag.stop) drag.stop();
+        else if (!drag.moved && this.mode === "tap") this.sound(drag.i);
       };
       ["pointerup", "pointercancel"].forEach((e) => this.canvas.addEventListener(e, end));
       this.resize();
       window.addEventListener("resize", () => this.resize());
     }
-    organLabel() {
-      this.organButton.textContent = this.mode === "blow" ? "Настроить орган: до ре ми фа соль ля" : "Настроить орган: соль ля си до ре ми";
-    }
 
     geom() {
-      const n = this.levels.length, bw = Math.min(60, (this.w - 40) / n - 14);
-      return { n, bw, gap: (this.w - n * bw) / (n + 1), top: 46, bh: this.h - 116 };
+      const n = this.levels.length, bw = Math.min(56, (this.w - 40) / n - 16);
+      return { n, bw, gap: (this.w - n * bw) / (n + 1), top: 46, bh: this.h - 130 };
     }
     bottleAt(x) {
       const { n, bw, gap } = this.geom();
-      for (let i = 0; i < n; i++) { const bx = gap + i * (bw + gap); if (x >= bx - 4 && x <= bx + bw + 4) return i; }
+      for (let i = 0; i < n; i++) { const bx = gap + i * (bw + gap); if (x >= bx - 6 && x <= bx + bw + 6) return i; }
       return undefined;
     }
     resize() {
-      const w = this.el.clientWidth, h = 256;
+      const w = this.el.clientWidth, h = 270;
       const dpr = window.devicePixelRatio || 1;
       this.canvas.width = w * dpr; this.canvas.height = h * dpr; this.canvas.style.height = h + "px";
       this.g.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -1925,36 +1974,29 @@
     blow(i) {
       const f = blowFreq(this.levels[i]);
       this.info.textContent = `дуем: ≈ ${Math.round(f)} Гц — чем больше воды, тем выше`;
-      this.lit = { i, at: Infinity };
+      this.lit.set(i, Infinity);
       this.draw();
       const stop = holdBlow(f);
-      return () => { stop(); this.lit = null; this.draw(); };
+      return () => { stop(); this.lit.delete(i); this.draw(); };
     }
 
     sound(i) {
       audio();
-      const t = ctx.currentTime, level = this.levels[i];
-      if (this.mode === "tap") {
-        const f = tapFreq(level);
-        tone(t, f, 0, 0.9, 0.25); tone(t, f * 2.76, 0, 0.35, 0.06); hiss(t, 0.01, 0.15, "highpass", 5000);
-        this.info.textContent = `стук: ≈ ${Math.round(f)} Гц — чем больше воды, тем ниже`;
-      } else {
-        const f = blowFreq(level);
-        tone(t, f, 0, 1.1, 0.3); hiss(t, 1.0, 0.06, "bandpass", f * 2);
-        this.info.textContent = `дуем: ≈ ${Math.round(f)} Гц — чем больше воды, тем выше`;
-      }
-      this.lit = { i, at: performance.now() };
+      const t = ctx.currentTime, f = tapFreq(this.levels[i]);
+      tone(t, f, 0, 0.9, 0.25); tone(t, f * 2.76, 0, 0.35, 0.06); hiss(t, 0.01, 0.15, "highpass", 5000);
+      this.info.textContent = `стук: ≈ ${Math.round(f)} Гц — чем больше воды, тем ниже`;
+      this.lit.set(i, performance.now());
       this.draw();
       setTimeout(() => this.draw(), 350);
     }
     draw() {
-      const g = this.g, { n, bw, gap, top, bh } = this.geom();
+      const g = this.g, { bw, gap, top, bh } = this.geom();
       g.fillStyle = COLORS.bg; g.fillRect(0, 0, this.w, this.h);
-      g.fillStyle = COLORS.muted; g.font = "11px Segoe UI, Arial, sans-serif"; g.textAlign = "left";
-      const lit = this.lit && (this.lit.at === Infinity || performance.now() - this.lit.at < 300) ? this.lit.i : -1;
+      const now = performance.now();
       this.levels.forEach((level, i) => {
         const x = gap + i * (bw + gap);
-        g.fillStyle = i === lit ? "#fff3cc" : "#fff";
+        const lit = this.lit.has(i) && (this.lit.get(i) === Infinity || now - this.lit.get(i) < 300);
+        g.fillStyle = lit ? "#fff3cc" : "#fff";
         g.fillRect(x, top, bw, bh);
         g.fillStyle = "#cfe0f7"; g.fillRect(x, top + bh * (1 - level), bw, bh * level);
         g.fillStyle = COLORS.right; g.font = "bold 14px Segoe UI, Arial, sans-serif"; g.textAlign = "center";
@@ -1966,19 +2008,22 @@
           g.beginPath(); g.moveTo(x + bw - (isDo ? 12 : 7), y); g.lineTo(x + bw, y); g.stroke();
           if (isDo) { g.fillStyle = COLORS.right; g.font = "bold 9px Segoe UI, Arial, sans-serif"; g.textAlign = "left"; g.fillText("до", x + bw + 2, y + 3); }
         });
-        g.textAlign = "center";
         g.strokeStyle = COLORS.right; g.lineWidth = 2;
         g.beginPath();
         g.moveTo(x + bw * 0.32, top - 26); g.lineTo(x + bw * 0.32, top); g.lineTo(x, top); g.lineTo(x, top + bh);
         g.lineTo(x + bw, top + bh); g.lineTo(x + bw, top); g.lineTo(x + bw * 0.68, top); g.lineTo(x + bw * 0.68, top - 26);
         g.stroke();
         const f = this.mode === "tap" ? tapFreq(level) : blowFreq(level);
-        g.fillStyle = COLORS.text; g.textAlign = "center"; g.font = "bold 12px Segoe UI, Arial, sans-serif";
+        g.textAlign = "center";
+        g.fillStyle = COLORS.text; g.font = "bold 12px Segoe UI, Arial, sans-serif";
         g.fillText(`${Math.round(f)} Гц`, x + bw / 2, top + bh + 18);
         g.fillStyle = COLORS.muted; g.font = "11px Segoe UI, Arial, sans-serif";
-        g.fillText(`${Math.round(level * 100)} % воды`, x + bw / 2, top + bh + 34);
+        g.fillText(`${Math.round(level * 100)} % воды`, x + bw / 2, top + bh + 33);
         g.fillStyle = COLORS.right; g.font = "bold 12px Segoe UI, Arial, sans-serif";
         g.fillText(nearestNote(f), x + bw / 2, top + bh + 50);
+        // the octave, so the last до is visibly the next one (C4 → C5)
+        g.fillStyle = COLORS.muted; g.font = "10px Segoe UI, Arial, sans-serif";
+        g.fillText(sciName(f), x + bw / 2, top + bh + 64);
       });
     }
   }
@@ -2015,7 +2060,13 @@
       });
       this.resize();
       window.addEventListener("resize", () => this.resize());
-      this.loop();
+      // animate only while the block is on screen
+      if (window.IntersectionObserver) {
+        new IntersectionObserver(([e]) => {
+          this.visible = e.isIntersecting;
+          if (this.visible && !this.looping) { this.looping = true; this.loop(); }
+        }).observe(this.canvas);
+      } else { this.visible = true; this.looping = true; this.loop(); }
     }
     resize() {
       const w = this.el.clientWidth, h = 200;
@@ -2056,7 +2107,7 @@
       this.grains.forEach((gr) => { gr.h = Math.max(0, gr.h + gr.v * 0.06); gr.v = gr.h > 0 || gr.v > 0 ? gr.v - 9.8 * 0.35 : 0; if (gr.h === 0 && gr.v < 0) gr.v = 0; });
       this.meter *= 0.97;
       this.draw(now, travel);
-      requestAnimationFrame(() => this.loop());
+      if (this.visible) requestAnimationFrame(() => this.loop()); else this.looping = false;
     }
     draw(now, travel) {
       const g = this.g, w = this.w, h = this.h;
@@ -2136,7 +2187,20 @@
     }).catch(() => {});
   }
 
+  // A picture (and its italic caption) right above an interactive block shows the same thing: hide it on screen.
+  function markDuplicate(el) {
+    const isCaption = (n) => n && n.tagName === "P" && n.children.length === 1 && n.firstElementChild.tagName === "EM" &&
+      n.textContent.trim() === n.firstElementChild.textContent.trim();
+    const isImage = (n) => n && n.tagName === "P" && n.querySelector("img") && n.textContent.trim() === "";
+    let prev = el.previousElementSibling;
+    if (isCaption(prev) && isImage(prev.previousElementSibling)) {
+      prev.classList.add("web-dup");
+      prev.previousElementSibling.classList.add("web-dup");
+    } else if (isImage(prev)) prev.classList.add("web-dup");
+  }
+
   function init() {
+    setTimeout(() => document.querySelectorAll(".lab, .player").forEach((el) => (el._lab || el._player) && markDuplicate(el)));
     document.querySelectorAll(".lab[data-lab=ruler]").forEach((el) => el._lab || (el._lab = new RulerLab(el)));
     document.querySelectorAll(".lab[data-lab=octaves]").forEach((el) => el._lab || (el._lab = new OctaveLab(el)));
     document.querySelectorAll(".lab[data-lab=intervals]").forEach((el) => el._lab || (el._lab = new IntervalLab(el)));

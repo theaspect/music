@@ -106,6 +106,13 @@ table img {
   touch-action: manipulation;
 }
 
+// The script marks a picture as .web-dup when an interactive block right below shows the same thing.
+@media screen {
+  .web-dup {
+    display: none;
+  }
+}
+
 // Paper gets the static diagrams and tables that sit next to every player; interactive parts and their hints are dropped.
 @media print {
   .player,

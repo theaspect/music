@@ -1,3 +1,4 @@
 exclude:
   - CLAUDE.md
+  - TODO.md
   - tools

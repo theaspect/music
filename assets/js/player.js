@@ -576,6 +576,7 @@
     hit(key, soundKey) {
       audio();
       activePlayer = this;
+      activeSynth = null;
       let stop;
       if (this.kind === "piano") stop = holdNote(midiFreq(key));
       else DRUM_SOUND[soundKey || key](ctx.currentTime);
@@ -2151,6 +2152,385 @@
     }
   }
 
+
+  // ---------- synthesizer (4.2): oscillator → filter → amplifier, driven by an envelope and an LFO ----------
+  // data-stages picks the blocks shown: "osc", "filter", "env", "lfo", or several, comma-separated.
+  // Every block is played with the sound, so what changes on the graph is heard at once.
+  const WAVES = [["sine", "Синус"], ["triangle", "Треугольник"], ["sawtooth", "Пила"], ["square", "Меандр"]];
+  const WAVE_TEXT = {
+    sine: "синус — одна чистая частота без обертонов: звук мягкий и глуховатый, как свист",
+    triangle: "треугольник — слабые нечётные обертоны: мягко, чуть ярче синуса, похоже на флейту",
+    sawtooth: "пила — все обертоны подряд: ярко и жужжаще, из неё фильтром лепят почти любой звук",
+    square: "меандр — только нечётные обертоны: «пустой», гнусавый звук, как у кларнета или старых приставок",
+  };
+  // Relative strength of harmonic n (1 = the fundamental) for each wave.
+  const harmonic = (type, n) => type === "sine" ? (n === 1 ? 1 : 0) : type === "sawtooth" ? 1 / n :
+    type === "square" ? (n % 2 ? 1 / n : 0) : (n % 2 ? 1 / (n * n) : 0);
+  const waveAt = (type, x) => { // one period over x ∈ [0, 1)
+    const f = x - Math.floor(x);
+    return type === "sine" ? Math.sin(2 * Math.PI * f) : type === "square" ? (f < 0.5 ? 1 : -1) :
+      type === "sawtooth" ? 1 - 2 * f : 1 - 4 * Math.abs(f - 0.5);
+  };
+  // Low-pass response of a resonant filter (a 2-pole approximation), resonance given in dB like Web Audio's Q.
+  const lowpass = (f, fc, qDb) => { const q = Math.pow(10, qDb / 20), r = f / fc; return 1 / Math.sqrt((1 - r * r) ** 2 + (r / q) ** 2); };
+  const SYNTH_DEFAULTS = {
+    osc: { type: "sawtooth", cutoff: 12000, q: 0, a: 0.01, d: 0.1, s: 0.9, r: 0.15, lfoRate: 5, lfoDepth: 0, lfoTarget: "pitch" },
+    filter: { type: "sawtooth", cutoff: 700, q: 6, a: 0.01, d: 0.1, s: 0.9, r: 0.2, lfoRate: 5, lfoDepth: 0, lfoTarget: "pitch" },
+    env: { type: "sawtooth", cutoff: 3000, q: 1, a: 0.4, d: 0.5, s: 0.5, r: 0.9, lfoRate: 5, lfoDepth: 0, lfoTarget: "pitch" },
+    lfo: { type: "sawtooth", cutoff: 1500, q: 4, a: 0.02, d: 0.2, s: 0.9, r: 0.3, lfoRate: 5, lfoDepth: 0.5, lfoTarget: "pitch" },
+  };
+  // lfoDepth is 0…1 of the target's range: ±1 semitone of pitch, or ±3 octaves of filter cutoff.
+  const SYNTH_PRESETS = [
+    ["Мягкий бас", { type: "triangle", cutoff: 500, q: 2, a: 0.01, d: 0.25, s: 0.7, r: 0.2, lfoRate: 5, lfoDepth: 0, lfoTarget: "pitch" }],
+    ["Яркий лид", { type: "sawtooth", cutoff: 4500, q: 8, a: 0.01, d: 0.2, s: 0.8, r: 0.3, lfoRate: 5.5, lfoDepth: 0.15, lfoTarget: "pitch" }],
+    ["Пэд", { type: "sawtooth", cutoff: 1200, q: 2, a: 0.9, d: 0.6, s: 0.8, r: 1.6, lfoRate: 0.3, lfoDepth: 0.25, lfoTarget: "filter" }],
+    ["Колокольчик", { type: "sine", cutoff: 12000, q: 0, a: 0.005, d: 1.4, s: 0, r: 1.2, lfoRate: 5, lfoDepth: 0, lfoTarget: "pitch" }],
+    ["Вау", { type: "sawtooth", cutoff: 900, q: 14, a: 0.02, d: 0.2, s: 0.9, r: 0.3, lfoRate: 2.5, lfoDepth: 0.6, lfoTarget: "filter" }],
+  ];
+
+  class SynthLab {
+    constructor(el) {
+      this.el = el;
+      this.stages = (el.dataset.stages || "osc").split(",").map((s) => s.trim());
+      const all = this.stages.length > 1;
+      this.p = { ...SYNTH_DEFAULTS[this.stages[0]] };
+      howto(el, all
+        ? "Как играть: нажимайте клавиши — звук держится, пока клавиша нажата, можно несколькими пальцами или клавишами компьютера. Тяните точки на графиках, выбирайте волну и готовые пресеты."
+        : {
+            osc: "Как играть: выберите форму волны и нажимайте клавиши. Слева — форма волны, справа — её обертоны.",
+            filter: "Как играть: нажимайте клавиши и тяните синюю точку: влево-вправо — частота среза, вверх-вниз — резонанс.",
+            env: "Как играть: тяните точки огибающей — атаку, спад с удержанием и затухание — и держите клавиши разное время.",
+            lfo: "Как играть: держите клавишу и тяните точку: влево-вправо — скорость покачивания, вверх-вниз — глубина. Цель — высота или фильтр.",
+          }[this.stages[0]]);
+      this.lo = 48; this.hi = 72; // до малой октавы … до второй
+      this.voices = new Map(); // midi → voice
+      this.lastOn = null; this.lastOff = null; // for the moving dot on the envelope
+      this.canvas = document.createElement("canvas");
+      this.canvas.style.touchAction = "none";
+      this.g = this.canvas.getContext("2d");
+      const bar = document.createElement("div");
+      bar.className = "player-controls";
+      const want = (s) => this.stages.includes(s);
+      bar.innerHTML = (want("osc") ? '<span class="player-mode">' + WAVES.map(([k, n]) =>
+          `<button type="button" data-wave="${k}"${k === this.p.type ? ' class="on"' : ""}>${n}</button>`).join("") + "</span>" : "") +
+        (want("lfo") ? '<span class="player-mode"><button type="button" data-lfo="pitch" class="on">LFO → высота</button>' +
+          '<button type="button" data-lfo="filter">LFO → фильтр</button></span>' : "") +
+        '<span class="player-score lab-info"></span>';
+      const extra = document.createElement("div");
+      if (all) {
+        extra.className = "player-controls";
+        extra.innerHTML = "<b>Пресеты:</b>" + SYNTH_PRESETS.map(([n], i) => `<button type="button" data-preset="${i}">${n}</button>`).join("");
+      }
+      el.append(this.canvas, bar, extra);
+      this.info = bar.querySelector(".lab-info");
+      bar.querySelectorAll("[data-wave]").forEach((b) => b.addEventListener("click", () => this.set({ type: b.dataset.wave })));
+      bar.querySelectorAll("[data-lfo]").forEach((b) => b.addEventListener("click", () => this.set({ lfoTarget: b.dataset.lfo })));
+      extra.querySelectorAll("[data-preset]").forEach((b) => b.addEventListener("click", () => {
+        this.set({ ...SYNTH_PRESETS[Number(b.dataset.preset)][1] });
+        this.info.textContent = `Пресет «${SYNTH_PRESETS[Number(b.dataset.preset)][0]}»: все настройки блоков разом. Нажимайте клавиши.`;
+      }));
+      // one pointer per finger: on a key it plays, on a handle it drags
+      const presses = new Map();
+      this.canvas.addEventListener("pointerdown", (ev) => {
+        const box = this.canvas.getBoundingClientRect();
+        const x = ev.clientX - box.left, y = ev.clientY - box.top;
+        audio();
+        activeSynth = this;
+        activePlayer = null;
+        const handle = (this.handles || []).find((h) => Math.hypot(h.x - x, h.y - y) < 18);
+        const m = handle ? undefined : ChordLab.prototype.keyAt.call(this, x, y);
+        if (!handle && m === undefined) return;
+        ev.preventDefault();
+        this.canvas.setPointerCapture(ev.pointerId);
+        presses.set(ev.pointerId, handle ? { handle } : { m, stop: this.noteOn(m) });
+      });
+      this.canvas.addEventListener("pointermove", (ev) => {
+        const press = presses.get(ev.pointerId);
+        if (!press || !press.handle) return;
+        const box = this.canvas.getBoundingClientRect();
+        press.handle.drag(ev.clientX - box.left, ev.clientY - box.top);
+      });
+      const end = (ev) => {
+        const press = presses.get(ev.pointerId);
+        if (!press) return;
+        presses.delete(ev.pointerId);
+        if (press.stop) press.stop();
+      };
+      ["pointerup", "pointercancel", "lostpointercapture"].forEach((e) => this.canvas.addEventListener(e, end));
+      this.resize();
+      window.addEventListener("resize", () => this.resize());
+      if (window.IntersectionObserver) {
+        new IntersectionObserver(([e]) => { this.visible = e.isIntersecting; if (this.visible) this.loop(); }).observe(this.canvas);
+      }
+      this.describe();
+    }
+
+    set(change) {
+      Object.assign(this.p, change);
+      this.el.querySelectorAll("[data-wave]").forEach((b) => b.classList.toggle("on", b.dataset.wave === this.p.type));
+      this.el.querySelectorAll("[data-lfo]").forEach((b) => b.classList.toggle("on", b.dataset.lfo === this.p.lfoTarget));
+      const now = ctx ? ctx.currentTime : 0;
+      this.voices.forEach((v) => { // live voices follow the knobs
+        v.osc.type = this.p.type;
+        v.filter.frequency.setTargetAtTime(this.p.cutoff, now, 0.02);
+        v.filter.Q.setTargetAtTime(this.p.q, now, 0.02);
+        v.lfo.frequency.setTargetAtTime(this.p.lfoRate, now, 0.02);
+        this.routeLfo(v);
+      });
+      this.describe();
+      this.draw();
+    }
+
+    routeLfo(v) {
+      v.lfoGain.disconnect();
+      if (this.p.lfoTarget === "pitch") { v.lfoGain.gain.value = this.p.lfoDepth * 100; v.lfoGain.connect(v.osc.detune); }
+      else { v.lfoGain.gain.value = this.p.lfoDepth * 3600; v.lfoGain.connect(v.filter.detune); }
+    }
+
+    describe() {
+      const s = this.stages[0], p = this.p;
+      if (this.stages.length > 1) {
+        this.info.textContent = "Весь путь звука: осциллятор → фильтр → усилитель, которым управляют огибающая и LFO. Выберите пресет или меняйте блоки сами.";
+        return;
+      }
+      this.info.textContent = s === "osc" ? WAVE_TEXT[p.type].replace(/^./, (c) => c.toUpperCase()) :
+        s === "filter" ? `Частота среза ${hz(p.cutoff)} Гц: обертоны выше неё гаснут. Резонанс ${Math.round(p.q)} дБ: ` +
+          (p.q > 8 ? "у среза острый пик — звук «квакает»" : "почти без пика — фильтр просто приглушает") :
+        s === "env" ? `Атака ${p.a.toFixed(2).replace(".", ",")} с, спад ${p.d.toFixed(2).replace(".", ",")} с, удержание ${Math.round(p.s * 100)} %, затухание ${p.r.toFixed(2).replace(".", ",")} с` :
+        `LFO: ${p.lfoRate.toFixed(1).replace(".", ",")} покачиваний в секунду, глубина ${Math.round(p.lfoDepth * 100)} % — ` +
+          (p.lfoTarget === "pitch" ? "качается высота: вибрато, как у певца" : "качается фильтр: «вау-вау»");
+    }
+
+    noteOn(m) {
+      const t = ctx.currentTime, p = this.p;
+      if (!this.out) {
+        this.out = ctx.createDynamicsCompressor();
+        this.out.connect(ctx.destination);
+      }
+      const osc = ctx.createOscillator(), filter = ctx.createBiquadFilter(), amp = ctx.createGain();
+      const lfo = ctx.createOscillator(), lfoGain = ctx.createGain();
+      osc.type = p.type; osc.frequency.value = midiFreq(m);
+      filter.type = "lowpass"; filter.frequency.value = p.cutoff; filter.Q.value = p.q;
+      lfo.frequency.value = p.lfoRate; lfo.connect(lfoGain);
+      osc.connect(filter); filter.connect(amp); amp.connect(this.out);
+      const peak = 0.25;
+      amp.gain.setValueAtTime(0, t);
+      amp.gain.linearRampToValueAtTime(peak, t + p.a);
+      amp.gain.linearRampToValueAtTime(peak * p.s, t + p.a + p.d);
+      const v = { osc, filter, amp, lfo, lfoGain };
+      this.routeLfo(v);
+      osc.start(t); lfo.start(t);
+      if (this.voices.has(m)) this.voices.get(m).release();
+      this.voices.set(m, v);
+      this.lastOn = performance.now(); this.lastOff = null;
+      v.release = () => {
+        const s = ctx.currentTime;
+        amp.gain.cancelScheduledValues(s);
+        amp.gain.setValueAtTime(amp.gain.value, s);
+        amp.gain.linearRampToValueAtTime(0, s + this.p.r);
+        osc.stop(s + this.p.r + 0.05); lfo.stop(s + this.p.r + 0.05);
+      };
+      this.loop();
+      return () => {
+        if (this.voices.get(m) !== v) return;
+        this.voices.delete(m);
+        v.release();
+        if (!this.voices.size) this.lastOff = performance.now();
+      };
+    }
+
+    resize() {
+      const w = this.el.clientWidth, all = this.stages.length > 1;
+      const panelsH = all ? (w > 640 ? 360 : 720) : 190;
+      const h = panelsH + 130;
+      const dpr = window.devicePixelRatio || 1;
+      this.canvas.width = w * dpr; this.canvas.height = h * dpr; this.canvas.style.height = h + "px";
+      this.g.setTransform(dpr, 0, 0, dpr, 0, 0);
+      this.w = w; this.h = h; this.panelsH = panelsH;
+      ChordLab.prototype.layout.call(this);
+      this.top = panelsH + 8; this.keysH = h - panelsH - 40;
+      this.draw();
+    }
+
+    loop() {
+      if (this.looping) return;
+      this.looping = true;
+      const tick = () => {
+        this.draw();
+        const busy = this.voices.size || (this.lastOff && performance.now() - this.lastOff < this.p.r * 1000 + 300);
+        if (busy && this.visible !== false) requestAnimationFrame(tick); else { this.looping = false; this.draw(); }
+      };
+      requestAnimationFrame(tick);
+    }
+
+    draw() {
+      const g = this.g, w = this.w;
+      g.fillStyle = COLORS.bg; g.fillRect(0, 0, w, this.h);
+      this.handles = [];
+      const boxes = this.stages.length === 1 ? [[this.stages[0], 8, 8, w - 16, this.panelsH - 12]] :
+        w > 640 ? this.stages.map((s, i) => [s, 8 + (i % 2) * (w / 2), 8 + Math.floor(i / 2) * 180, w / 2 - 16, 168]) :
+          this.stages.map((s, i) => [s, 8, 8 + i * 180, w - 16, 168]);
+      boxes.forEach(([s, x, y, bw, bh]) => {
+        g.fillStyle = "#fff"; g.strokeStyle = "#e2e2e2"; g.lineWidth = 1;
+        roundRect(g, x, y, bw, bh, 6); g.fill(); g.stroke();
+        g.fillStyle = COLORS.text; g.font = "bold 12px Segoe UI, Arial, sans-serif"; g.textAlign = "left";
+        g.fillText({ osc: "1. Осциллятор: форма волны", filter: "2. Фильтр: что отрезать", env: "3. Огибающая: громкость во времени",
+                     lfo: "4. LFO: медленное покачивание" }[s], x + 10, y + 18);
+        this["draw_" + s](x + 10, y + 28, bw - 20, bh - 36);
+      });
+      this.drawKeys();
+    }
+
+    draw_osc(x, y, w, h) {
+      const g = this.g, type = this.p.type, half = w * 0.55;
+      g.strokeStyle = "#e4e4dc"; g.lineWidth = 1;
+      g.beginPath(); g.moveTo(x, y + h / 2); g.lineTo(x + half - 10, y + h / 2); g.stroke();
+      g.strokeStyle = COLORS.right; g.lineWidth = 2.5; g.beginPath();
+      for (let i = 0; i <= 200; i++) g.lineTo(x + (i / 200) * (half - 10), y + h / 2 - (h / 2 - 8) * waveAt(type, (i / 200) * 2));
+      g.stroke();
+      g.fillStyle = COLORS.muted; g.font = "10px Segoe UI, Arial, sans-serif"; g.textAlign = "left";
+      g.fillText("два периода волны", x, y + h);
+      this.harmonics(x + half + 6, y, w - half - 6, h, () => 1);
+    }
+
+    // Bars of the first 16 harmonics of the wave; `through(f)` scales each one (the filter, if any).
+    harmonics(x, y, w, h, through) {
+      const g = this.g, type = this.p.type, n = 16, bw = w / n, base = 110;
+      for (let k = 1; k <= n; k++) {
+        const a = harmonic(type, k), out = Math.min(1.6, a * through(base * k));
+        if (a > 0) { g.fillStyle = "#e3eaf7"; g.fillRect(x + (k - 1) * bw + 1, y + h - 14 - a * (h - 24), bw - 2, a * (h - 24)); }
+        g.fillStyle = COLORS.right; g.fillRect(x + (k - 1) * bw + 1, y + h - 14 - Math.min(1, out) * (h - 24), bw - 2, Math.min(1, out) * (h - 24));
+      }
+      g.fillStyle = COLORS.muted; g.font = "10px Segoe UI, Arial, sans-serif"; g.textAlign = "left";
+      g.fillText("обертоны: 1, 2, 3 … 16-й", x, y + h);
+    }
+
+    draw_filter(x, y, w, h) {
+      const g = this.g, p = this.p, fMin = 60, fMax = 12000, dbMin = -40, dbMax = 20;
+      const fx = (f) => x + (Math.log(f / fMin) / Math.log(fMax / fMin)) * w;
+      const bottom = y + h - 14;
+      const fy = (db) => bottom - ((Math.max(dbMin, Math.min(dbMax, db)) - dbMin) / (dbMax - dbMin)) * (h - 20);
+      const dB = (v) => 20 * Math.log10(Math.max(1e-6, v));
+      g.strokeStyle = "#e4e4dc"; g.lineWidth = 1; g.setLineDash([4, 3]);
+      g.beginPath(); g.moveTo(x, fy(0)); g.lineTo(x + w, fy(0)); g.stroke(); g.setLineDash([]);
+      g.fillStyle = COLORS.muted; g.font = "10px Segoe UI, Arial, sans-serif"; g.textAlign = "right";
+      g.fillText("0 дБ", x + w, fy(0) - 3);
+      // harmonics of a 110 Hz wave on the frequency axis: light before the filter, blue after it
+      for (let k = 1; 110 * k < fMax; k++) {
+        const f = 110 * k, a = harmonic(p.type, k);
+        if (!a) continue;
+        const before = dB(a), after = before + dB(lowpass(f, p.cutoff, p.q));
+        g.fillStyle = "#e3eaf7"; g.fillRect(fx(f) - 3, fy(before), 6, bottom - fy(before));
+        g.fillStyle = COLORS.right; g.fillRect(fx(f) - 3, fy(after), 6, bottom - fy(after));
+      }
+      g.strokeStyle = COLORS.bad; g.lineWidth = 2; g.beginPath();
+      for (let i = 0; i <= 240; i++) { const f = fMin * Math.pow(fMax / fMin, i / 240); g.lineTo(fx(f), fy(dB(lowpass(f, p.cutoff, p.q)))); }
+      g.stroke();
+      g.fillStyle = COLORS.muted; g.textAlign = "left";
+      g.fillText("частота →   светлое — обертоны до фильтра, синее — после, красное — фильтр (в децибелах)", x, y + h);
+      this.handle(fx(p.cutoff), fy(dB(lowpass(p.cutoff, p.cutoff, p.q))), (mx, my) => {
+        const f = fMin * Math.pow(fMax / fMin, Math.max(0, Math.min(1, (mx - x) / w)));
+        const db = dbMin + ((bottom - my) / (h - 20)) * (dbMax - dbMin);
+        this.set({ cutoff: f, q: Math.max(0, Math.min(20, db)) });
+      });
+    }
+
+    draw_env(x, y, w, h) {
+      const g = this.g, p = this.p, span = 4.2; // seconds across the panel
+      const sx = (s) => x + (s / span) * w, sy = (v) => y + h - 14 - v * (h - 24);
+      const hold = 0.8, rStart = p.a + p.d + hold;
+      g.strokeStyle = COLORS.right; g.lineWidth = 2.5; g.beginPath();
+      g.moveTo(sx(0), sy(0)); g.lineTo(sx(p.a), sy(1)); g.lineTo(sx(p.a + p.d), sy(p.s)); g.lineTo(sx(rStart), sy(p.s)); g.lineTo(sx(rStart + p.r), sy(0));
+      g.stroke();
+      g.fillStyle = COLORS.muted; g.font = "10px Segoe UI, Arial, sans-serif"; g.textAlign = "center";
+      [["атака", p.a / 2, 1], ["спад", p.a + p.d / 2, (1 + p.s) / 2], ["удержание", p.a + p.d + hold / 2, p.s], ["затухание", rStart + p.r / 2, p.s / 2]]
+        .forEach(([n, s, v], i) => {
+          if (i < 2 && sx(p.a + p.d) - sx(0) < 70) { if (i === 0) g.fillText("атака и спад", sx(0) + 34, sy(1) + 4); return; }
+          g.fillText(n, sx(s), sy(v) - 6);
+        });
+      g.textAlign = "left"; g.fillText("время →   клавиша нажата … отпущена", x, y + h);
+      // the moving dot: where the last note is on the envelope now
+      if (this.lastOn && (this.voices.size || this.lastOff)) {
+        const now = performance.now();
+        let s, v;
+        if (this.voices.size) {
+          const e = (now - this.lastOn) / 1000;
+          s = Math.min(e, p.a + p.d + hold);
+          v = e < p.a ? e / p.a : e < p.a + p.d ? 1 - (1 - p.s) * (e - p.a) / p.d : p.s;
+        } else {
+          const e = (now - this.lastOff) / 1000;
+          s = rStart + Math.min(e, p.r); v = p.s * Math.max(0, 1 - e / p.r);
+        }
+        g.fillStyle = COLORS.flash; g.strokeStyle = "#b8860b"; g.lineWidth = 1.5;
+        g.beginPath(); g.arc(sx(s), sy(v), 7, 0, Math.PI * 2); g.fill(); g.stroke();
+      }
+      this.handle(sx(p.a), sy(1), (mx) => this.set({ a: Math.max(0.005, Math.min(2, ((mx - x) / w) * span)) }));
+      this.handle(sx(p.a + p.d), sy(p.s), (mx, my) => this.set({
+        d: Math.max(0.02, Math.min(2, ((mx - x) / w) * span - p.a)), s: Math.max(0, Math.min(1, (y + h - 14 - my) / (h - 24))) }));
+      this.handle(sx(rStart + p.r), sy(0), (mx) => this.set({ r: Math.max(0.02, Math.min(2.5, ((mx - x) / w) * span - rStart)) }));
+    }
+
+    draw_lfo(x, y, w, h) {
+      const g = this.g, p = this.p, span = 2; // seconds across the panel
+      const mid = y + (h - 14) / 2, amp = (h - 30) / 2;
+      g.strokeStyle = "#e4e4dc"; g.lineWidth = 1; g.beginPath(); g.moveTo(x, mid); g.lineTo(x + w, mid); g.stroke();
+      const phase = this.voices.size ? (performance.now() / 1000) * p.lfoRate * 2 * Math.PI : 0;
+      g.strokeStyle = COLORS.right; g.lineWidth = 2.5; g.beginPath();
+      for (let i = 0; i <= 300; i++) {
+        const s = (i / 300) * span;
+        g.lineTo(x + (i / 300) * w, mid - amp * p.lfoDepth * Math.sin(2 * Math.PI * p.lfoRate * s - phase));
+      }
+      g.stroke();
+      g.fillStyle = COLORS.muted; g.font = "10px Segoe UI, Arial, sans-serif"; g.textAlign = "left";
+      g.fillText(`2 секунды →   вверх-вниз: ${p.lfoTarget === "pitch" ? "высота ±1 полутон" : "частота среза фильтра ±3 октавы"} при глубине 100 %`, x, y + h);
+      const qx = x + (0.25 / p.lfoRate / span) * w; // the first crest
+      this.handle(qx, mid - amp * p.lfoDepth, (mx, my) => this.set({
+        lfoRate: Math.max(0.2, Math.min(12, 0.25 / Math.max(0.01, ((mx - x) / w) * span))),
+        lfoDepth: Math.max(0, Math.min(1, (mid - my) / amp)) }));
+    }
+
+    handle(x, y, drag) {
+      const g = this.g;
+      g.fillStyle = "#7eaee6"; g.strokeStyle = COLORS.right; g.lineWidth = 2;
+      g.beginPath(); g.arc(x, y, 8, 0, Math.PI * 2); g.fill(); g.stroke();
+      this.handles.push({ x, y, drag });
+    }
+
+    drawKeys() {
+      const g = this.g, { top, keysH, kw } = this;
+      g.textAlign = "center";
+      for (let m = this.lo; m <= this.hi; m++) {
+        if (isBlack(m)) continue;
+        const k = this.keys[m];
+        g.fillStyle = this.voices.has(m) ? COLORS.flash : m % 12 === 0 ? "#e3eaf7" : "#fff";
+        roundRect(g, k.x + 1, top, k.w - 2, keysH, 6); g.fill();
+        g.strokeStyle = "#cfcfc6"; g.lineWidth = 1.5; g.stroke();
+        g.fillStyle = "#222"; g.font = `${m % 12 === 0 ? "bold " : ""}${Math.min(13, kw * 0.33)}px Segoe UI, Arial, sans-serif`;
+        g.fillText(NAMES[m % 12], k.x + k.w / 2, top + keysH - 8);
+      }
+      for (let m = this.lo; m <= this.hi; m++) {
+        if (!isBlack(m)) continue;
+        const k = this.keys[m];
+        g.fillStyle = this.voices.has(m) ? COLORS.flash : "#c5c5bc";
+        roundRect(g, k.x, top - 1, k.w, keysH * 0.62 + 1, 4); g.fill();
+      }
+      octaveBrackets(g, this.keys, this.lo, this.hi, top + keysH + 8);
+    }
+  }
+  // Computer keys play the synth last touched: the A row from до of its lowest octave, as on the players.
+  let activeSynth = null;
+  const synthHeld = {};
+  document.addEventListener("keydown", (ev) => {
+    const s = activeSynth;
+    if (!s || ev.repeat || ev.ctrlKey || ev.metaKey || ev.altKey || synthHeld[ev.code]) return;
+    const i = PIANO_KEYS.indexOf(ev.code);
+    if (i < 0) return;
+    ev.preventDefault();
+    audio();
+    synthHeld[ev.code] = s.noteOn(60 + i);
+  });
+  document.addEventListener("keyup", (ev) => { if (synthHeld[ev.code]) { synthHeld[ev.code](); delete synthHeld[ev.code]; } });
+
   // Keys and MIDI go to the player last started or touched.
   let activePlayer = null;
   document.addEventListener("keydown", (ev) => {
@@ -2206,6 +2586,7 @@
     document.querySelectorAll(".lab[data-lab=intervals]").forEach((el) => el._lab || (el._lab = new IntervalLab(el)));
     document.querySelectorAll(".lab[data-lab=ear]").forEach((el) => el._lab || (el._lab = new EarLab(el)));
     document.querySelectorAll(".lab[data-lab=chords]").forEach((el) => el._lab || (el._lab = new ChordLab(el)));
+    document.querySelectorAll(".lab[data-lab=synth]").forEach((el) => el._lab || (el._lab = new SynthLab(el)));
     document.querySelectorAll(".lab[data-lab=keyboard]").forEach((el) => el._lab || (el._lab = new KeyboardLab(el)));
     document.querySelectorAll(".lab[data-lab=string]").forEach((el) => el._lab || (el._lab = new StringLab(el)));
     document.querySelectorAll(".lab[data-lab=bottles]").forEach((el) => el._lab || (el._lab = new BottleLab(el)));

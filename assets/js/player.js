@@ -1097,9 +1097,24 @@
 
   // ---------- intervals (1.5) ----------
   // Exact ratios, as on a monochord: the waves of the two notes meet again every `q` periods of the lower one.
-  const INTERVALS = [["Октава", 2, 1, "до–до"], ["Квинта", 3, 2, "до–соль"], ["Кварта", 4, 3, "до–фа"],
-                     ["Б. терция", 5, 4, "до–ми"], ["М. терция", 6, 5, "до–ми♭"], ["Б. секунда", 9, 8, "до–ре"],
-                     ["М. секунда", 16, 15, "до–до♯"]];
+  // [name, p, q, example, semitones from до]
+  const INTERVALS = [["Октава", 2, 1, "до–до", 12], ["Квинта", 3, 2, "до–соль", 7], ["Кварта", 4, 3, "до–фа", 5],
+                     ["Б. терция", 5, 4, "до–ми", 4], ["М. терция", 6, 5, "до–ми♭", 3], ["Б. секунда", 9, 8, "до–ре", 2],
+                     ["М. секунда", 16, 15, "до–до♯", 1]];
+  // A tiny keyboard from до to до with the pressed keys in blue, to sit inside an interval box.
+  function miniKeys(g, x, y, w, h, pressed) {
+    const kw = w / 8;
+    const white = [0, 2, 4, 5, 7, 9, 11, 12];
+    white.forEach((m, i) => {
+      g.fillStyle = pressed.includes(m) ? COLORS.right : "#fff";
+      g.fillRect(x + i * kw, y, kw, h);
+      g.strokeStyle = "#b8b8ae"; g.lineWidth = 0.8; g.strokeRect(x + i * kw, y, kw, h);
+    });
+    [[1, 0], [3, 1], [6, 3], [8, 4], [10, 5]].forEach(([m, after]) => {
+      g.fillStyle = pressed.includes(m) ? COLORS.right : "#8f8f86";
+      g.fillRect(x + (after + 1) * kw - kw * 0.3, y, kw * 0.6, h * 0.6);
+    });
+  }
   const DO4 = 261.63;
 
   class IntervalLab {
@@ -1149,19 +1164,20 @@
     draw() {
       const g = this.g, w = this.w, h = this.h;
       g.fillStyle = COLORS.bg; g.fillRect(0, 0, w, h);
-      const n = INTERVALS.length, gap = 6, bw = (w - 16 - gap * (n - 1)) / n, bh = Math.min(72, h * 0.28), top = 8;
+      const n = INTERVALS.length, gap = 6, bw = (w - 16 - gap * (n - 1)) / n, bh = Math.min(96, h * 0.36), top = 8;
       this.boxBottom = top + bh;
-      INTERVALS.forEach(([name, pn, q, ex], i) => {
+      INTERVALS.forEach(([name, pn, q, ex, semis], i) => {
         const x = 8 + i * (bw + gap), good = i < 5, on = i === this.pick;
         g.fillStyle = good ? "#e6f4e6" : "#f9e6e6";
         roundRect(g, x, top, bw, bh, 8); g.fill();
         g.strokeStyle = good ? "#2a9d4b" : COLORS.bad; g.lineWidth = on ? 3 : 1.5; g.stroke();
         g.textAlign = "center"; g.fillStyle = COLORS.text;
         g.font = `bold ${Math.min(13, bw * 0.13)}px Segoe UI, Arial, sans-serif`;
-        g.fillText(name, x + bw / 2, top + bh * 0.32);
+        g.fillText(name, x + bw / 2, top + bh * 0.22);
         g.font = `${Math.min(13, bw * 0.13)}px Segoe UI, Arial, sans-serif`;
-        g.fillText(`${pn} : ${q}`, x + bw / 2, top + bh * 0.6);
-        g.fillStyle = COLORS.muted; g.fillText(ex, x + bw / 2, top + bh * 0.86);
+        g.fillText(`${pn} : ${q}`, x + bw / 2, top + bh * 0.42);
+        g.fillStyle = COLORS.muted; g.fillText(ex, x + bw / 2, top + bh * 0.6);
+        miniKeys(g, x + 6, top + bh * 0.68, bw - 12, bh * 0.24, [0, semis]);
       });
       // three waves over `q` periods of the lower note (at least two), so the meeting point is always on screen
       const [name, pn, q] = INTERVALS[this.pick];

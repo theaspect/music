@@ -82,6 +82,18 @@ table img {
   color: #2f72c9;
   cursor: pointer;
 }
+.lab-howto {
+  padding: 8px 12px;
+  font-size: 14px;
+  color: #1f3d66;
+  background: #eef3fb;
+  border-bottom: 1px solid #e2e2e2;
+}
+.lab canvas,
+.player canvas {
+  cursor: pointer;
+  touch-action: none;
+}
 
 // Paper gets the static diagrams and tables that sit next to every player; interactive parts and their hints are dropped.
 @media print {

@@ -156,6 +156,13 @@
     const end = () => { if (stop) { stop(); stop = null; } };
     ["pointerup", "pointercancel", "lostpointercapture"].forEach((e) => canvas.addEventListener(e, end));
   }
+  function howto(el, text) {
+    const d = document.createElement("div");
+    d.className = "lab-howto";
+    d.textContent = text;
+    el.prepend(d);
+  }
+
   // Press-and-hold on a button: `start()` returns a stop function.
   function holdButton(btn, start) {
     let stop = null;
@@ -272,6 +279,9 @@
     constructor(el) {
       this.el = el;
       this.kind = el.dataset.kind;
+      howto(el, this.kind === "piano"
+        ? "Как играть: «Старт» — ноты падают к клавишам. По клавишам можно нажимать мышкой, пальцем или клавиатурой; «Играть самому» — проверить себя."
+        : "Как играть: «Старт» — ноты падают к пэдам. По пэдам можно стучать мышкой, пальцем или клавиатурой; «Играть самому» — проверить себя.");
       this.song = this.kind === "piano" ? parsePiano(el) : parseDrums(el);
       this.bpm = Number(el.dataset.bpm || 70);
       this.metronome = this.kind === "drums";
@@ -764,6 +774,19 @@
     return Object.fromEntries(order.map((o) => [o.k, o.x]));
   }
 
+  // Two small arrowheads either side of (x, y): "this can be dragged sideways".
+  function arrows(g, x, y, text) {
+    g.fillStyle = COLORS.right; g.strokeStyle = COLORS.right; g.lineWidth = 2;
+    [-1, 1].forEach((d) => {
+      const tip = x + d * 26, base = x + d * 16;
+      g.beginPath(); g.moveTo(tip, y); g.lineTo(base, y - 6); g.lineTo(base, y + 6); g.closePath(); g.fill();
+    });
+    if (text) {
+      g.font = "bold 12px Segoe UI, Arial, sans-serif"; g.textAlign = "center";
+      g.fillText(text, x, y - 10);
+    }
+  }
+
   function plural(n, one, few, many) {
     if (n % 1) return few;
     const d = n % 10, dd = n % 100;
@@ -799,6 +822,7 @@
   class RulerLab {
     constructor(el) {
       this.el = el;
+      howto(el, "Как играть: тяните линейку вправо или влево — меняется свисающий конец. Щёлкните по линейке — она задрожит.");
       this.free = 20; // cm hanging over the edge
       this.pluckedAt = null;
       this.canvas = document.createElement("canvas");
@@ -939,8 +963,8 @@
       g.beginPath(); g.moveTo(edge, h - 22); g.lineTo(edge + freeLen, h - 22); g.stroke();
       g.fillStyle = COLORS.text; g.font = "bold 12px Segoe UI, Arial, sans-serif";
       g.fillText(`${this.free} см свободно`, edge + freeLen / 2, h - 8);
+      if (!this.pluckedAt || age > 2) arrows(g, edge + freeLen - 10, y0 - 30, "тяните");
       g.fillStyle = COLORS.muted; g.font = "11px Segoe UI, Arial, sans-serif"; g.textAlign = "left";
-      g.fillText("тяните линейку вправо или влево; щелчок — щёлкнуть по концу", 8, 16);
     }
   }
 
@@ -952,6 +976,7 @@
   class OctaveLab {
     constructor(el) {
       this.el = el;
+      howto(el, "Как играть: нажмите и держите октаву — звучит её «ля», а сверху видна волна.");
       this.freq = 440;
       this.text = "ля первой октавы — 440 колебаний в секунду";
       this.canvas = document.createElement("canvas");
@@ -1050,6 +1075,7 @@
   class IntervalLab {
     constructor(el) {
       this.el = el;
+      howto(el, "Как играть: нажмите и держите интервал — звучат обе ноты вместе. «Сыграть» — сначала по очереди, потом вместе.");
       this.pick = 1;
       this.canvas = document.createElement("canvas");
       this.g = this.canvas.getContext("2d");
@@ -1141,6 +1167,7 @@
   class EarLab {
     constructor(el) {
       this.el = el;
+      howto(el, "Как играть: сначала сделайте звук устройства тихим. Нажмите и держите кнопку — звучит тон.");
       this.db = 0;
       this.canvas = document.createElement("canvas");
       this.g = this.canvas.getContext("2d");
@@ -1250,6 +1277,7 @@
   class ChordLab {
     constructor(el) {
       this.el = el;
+      howto(el, "Как играть: щёлкайте по клавишам, чтобы выбрать ноты, затем нажмите и держите «Вместе». Готовые созвучия — кнопки внизу.");
       this.lo = 60; this.hi = 83; // до4 … си5
       this.chosen = new Set([60, 64, 67]);
       this.lit = new Map();
@@ -1370,6 +1398,7 @@
   class KeyboardLab {
     constructor(el) {
       this.el = el;
+      howto(el, "Как играть: нажимайте клавиши — нота звучит, пока клавиша нажата.");
       this.lo = 60; this.hi = 84; // до4 … до6, as in the diagram
       this.down = null;
       this.canvas = document.createElement("canvas");
@@ -1439,6 +1468,7 @@
   class StringLab {
     constructor(el) {
       this.el = el;
+      howto(el, "Как играть: тяните синий кружок-палец вдоль струны или жмите кнопки с нотами. Щёлкните по струне — она зазвучит.");
       this.part = 1; // sounding share of the string
       this.tension = 1;
       this.pluckedAt = null;
@@ -1550,9 +1580,9 @@
       {
         g.fillStyle = this.part < 1 ? "#7eaee6" : "#e3eaf7"; g.strokeStyle = COLORS.right; g.lineWidth = 1.5;
         g.beginPath(); g.arc(fx, y0 - 14, 9, 0, Math.PI * 2); g.fill(); g.stroke();
+        arrows(g, fx, y0 - 14, "");
       }
       g.fillStyle = COLORS.muted; g.font = "11px Segoe UI, Arial, sans-serif"; g.textAlign = "left";
-      g.fillText("тяните палец вдоль струны, к краю — звучит вся струна; щелчок по струне — щипок", 8, 16);
     }
   }
 
@@ -1565,6 +1595,7 @@
   class BottleLab {
     constructor(el) {
       this.el = el;
+      howto(el, "Как играть: щёлкните по бутылке — она зазвучит, в режиме «Дуть» — пока держите. Потяните бутылку вверх или вниз — изменится уровень воды.");
       this.levels = [0.15, 0.3, 0.45, 0.6, 0.72, 0.85];
       this.mode = "tap";
       this.lit = null;
@@ -1663,13 +1694,14 @@
       const g = this.g, { n, bw, gap, top, bh } = this.geom();
       g.fillStyle = COLORS.bg; g.fillRect(0, 0, this.w, this.h);
       g.fillStyle = COLORS.muted; g.font = "11px Segoe UI, Arial, sans-serif"; g.textAlign = "left";
-      g.fillText("щелчок по бутылке — звук; потяните вверх или вниз — меняется уровень воды", 8, 16);
       const lit = this.lit && (this.lit.at === Infinity || performance.now() - this.lit.at < 300) ? this.lit.i : -1;
       this.levels.forEach((level, i) => {
         const x = gap + i * (bw + gap);
         g.fillStyle = i === lit ? "#fff3cc" : "#fff";
         g.fillRect(x, top, bw, bh);
         g.fillStyle = "#cfe0f7"; g.fillRect(x, top + bh * (1 - level), bw, bh * level);
+        g.fillStyle = COLORS.right; g.font = "bold 14px Segoe UI, Arial, sans-serif"; g.textAlign = "center";
+        g.fillText("↕", x + bw / 2, top + bh * (1 - level) + 15);
         g.strokeStyle = COLORS.right; g.lineWidth = 2;
         g.beginPath();
         g.moveTo(x + bw * 0.32, top - 26); g.lineTo(x + bw * 0.32, top); g.lineTo(x, top); g.lineTo(x, top + bh);
@@ -1688,6 +1720,7 @@
   class PotLab {
     constructor(el) {
       this.el = el;
+      howto(el, "Как играть: щёлкните по кастрюле или нажмите «Стукнуть»; «Спеть» звучит, пока держите. Волна показана замедленно: на самом деле звук летит тысячные доли секунды.");
       this.volume = 0.6;
       this.events = []; // {at, strength}: when a sound left the pot
       this.grains = Array.from({ length: 14 }, (_, i) => ({ x: (i + 0.5) / 14, h: 0, v: 0 }));
@@ -1776,7 +1809,6 @@
       g.fillStyle = COLORS.muted; g.font = "11px Segoe UI, Arial, sans-serif"; g.textAlign = "center";
       g.fillText("миска с плёнкой и крупой", (bx0 + bx1) / 2, h - 6);
       g.textAlign = "left";
-      g.fillText("полёт волны показан замедленно: на самом деле звук пролетает полметра за полторы тысячных секунды", 8, 16);
     }
   }
 

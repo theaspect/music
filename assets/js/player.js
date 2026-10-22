@@ -14,8 +14,9 @@
   const COLORS = { right: "#2f72c9", left: "#e0892b", foot: "#555b66", pad: "#cfe0f7", cymbal: "#eef3fb",
                    line: "#c9c9c0", text: "#111", muted: "#666", flash: "#ffd166", bg: "#fafaf7" };
 
-  // Rows follow the kit diagram in 3.4 (top: crash, tom, ride; bottom: hi-hat, snare, tom, floor tom; pedals below),
-  // but in a 760-wide box where every pad and pedal has a column of its own, so lanes never overlap.
+  // Rows follow the kit diagram in 3.4 (top: crash, tom, ride; bottom: hi-hat, snare, tom, floor tom) in a 760 × 250 box
+  // where every pad and pedal has a column of its own, so lanes never overlap. Pedals are narrow upright
+  // rectangles (x, y = top centre), which fit into the bottom row between the pads.
   const KIT = {
     cr: { name: "Крэш", x: 190, y: 70, r: 38, cymbal: true, hand: "right" },
     t1: { name: "Том 1", x: 345, y: 72, r: 38, hand: "right" },
@@ -25,8 +26,8 @@
     sn: { name: "Малый", x: 265, y: 180, r: 38, hand: "left" },
     t2: { name: "Том 2", x: 425, y: 180, r: 38, hand: "right" },
     ft: { name: "Напольный", short: "Нап.", x: 680, y: 175, r: 38, hand: "right" },
-    hp: { name: "Педаль хэта", short: "Пед. хэта", x: 125, y: 262, pedal: true },
-    kk: { name: "Бочка", x: 505, y: 262, pedal: true },
+    hp: { name: "Хэт", x: 125, y: 150, pedal: true },
+    kk: { name: "Бочка", x: 505, y: 150, pedal: true },
   };
 
   // ---------- audio ----------
@@ -190,7 +191,7 @@
 
     resize() {
       const w = this.el.clientWidth;
-      const h = Math.round(this.kind === "piano" ? Math.min(420, w * 0.75) : Math.min(560, w * 0.95));
+      const h = Math.round(this.kind === "piano" ? Math.min(420, w * 0.75) : Math.min(480, w * 0.8));
       const dpr = window.devicePixelRatio || 1;
       this.canvas.width = w * dpr;
       this.canvas.height = h * dpr;
@@ -289,7 +290,7 @@
       const g = this.g, w = this.w;
       const highway = this.h * 0.5;
       const kitTop = highway + 8;
-      const s = Math.min(w / 760, (this.h - kitTop) / 300);
+      const s = Math.min(w / 760, (this.h - kitTop) / 250);
       const ox = (w - 760 * s) / 2;
       const px = (x) => ox + x * s;
       const py = (y) => kitTop + (y - 20) * s;
@@ -352,11 +353,11 @@
         const on = flash.has(k);
         g.globalAlpha = used.has(k) ? 1 : 0.35;
         if (kit.pedal) {
-          const r = { x: px(kit.x) - 45 * s, y: py(kit.y), w: 90 * s, h: 40 * s };
+          const r = { x: px(kit.x) - 20 * s, y: py(kit.y), w: 40 * s, h: 70 * s };
           g.fillStyle = on ? COLORS.flash : "#9aa1ad";
           roundRect(g, r.x, r.y, r.w, r.h, 6 * s);
           g.fill(); g.strokeStyle = COLORS.foot; g.lineWidth = 2; g.stroke();
-          label(g, kit.name, px(kit.x), py(kit.y) + 24 * s, s);
+          label(g, kit.name, px(kit.x), py(kit.y) + 84 * s, s);
           this.targets.push({ key: k, inside: (x, y) => x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h });
         } else {
           const cx = px(kit.x), cy = py(kit.y), r = kit.r * s;
@@ -376,8 +377,8 @@
           g.globalAlpha = 1 - left * 0.7;
           g.lineWidth = 3;
           if (kit.pedal) {
-            const grow = 1 + left * 0.6;
-            roundRect(g, px(kit.x) - 45 * s * grow, py(kit.y) + 20 * s - 20 * s * grow, 90 * s * grow, 40 * s * grow, 6 * s);
+            const grow = 1 + left * 0.8;
+            roundRect(g, px(kit.x) - 20 * s * grow, py(kit.y) + 35 * s - 35 * s * grow, 40 * s * grow, 70 * s * grow, 6 * s);
             g.stroke();
           } else {
             g.beginPath(); g.arc(px(kit.x), py(kit.y), kit.r * s * (1 + left), 0, Math.PI * 2); g.stroke();

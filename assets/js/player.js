@@ -156,6 +156,56 @@
     const end = () => { if (stop) { stop(); stop = null; } };
     ["pointerup", "pointercancel", "lostpointercapture"].forEach((e) => canvas.addEventListener(e, end));
   }
+  // Press-and-hold on a button: `start()` returns a stop function.
+  function holdButton(btn, start) {
+    let stop = null;
+    btn.addEventListener("pointerdown", (ev) => {
+      audio();
+      stop = start() || null;
+      if (stop) btn.setPointerCapture(ev.pointerId);
+    });
+    const end = () => { if (stop) { stop(); stop = null; } };
+    ["pointerup", "pointercancel", "lostpointercapture"].forEach((e) => btn.addEventListener(e, end));
+  }
+  function release(g, nodes, fade) {
+    const s = ctx.currentTime;
+    g.gain.cancelScheduledValues(s);
+    g.gain.setValueAtTime(Math.max(0.0001, g.gain.value), s);
+    g.gain.linearRampToValueAtTime(0, s + fade);
+    nodes.forEach((n) => n.stop(s + fade + 0.05));
+  }
+  function holdSine(f, gain) {
+    const t = ctx.currentTime, o = ctx.createOscillator(), g = ctx.createGain();
+    o.frequency.value = f;
+    g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(gain, t + 0.05);
+    o.connect(g); g.connect(ctx.destination); o.start(t);
+    return () => release(g, [o], 0.08);
+  }
+  function holdBlow(f) {
+    const t = ctx.currentTime, g = ctx.createGain();
+    g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(1, t + 0.15);
+    g.connect(ctx.destination);
+    const o = ctx.createOscillator(), og = ctx.createGain();
+    o.frequency.value = f; og.gain.value = 0.28; o.connect(og); og.connect(g);
+    const s = ctx.createBufferSource(), sf = ctx.createBiquadFilter(), sg = ctx.createGain();
+    s.buffer = noise; s.loop = true; sf.type = "bandpass"; sf.frequency.value = f * 2; sg.gain.value = 0.07;
+    s.connect(sf); sf.connect(sg); sg.connect(g);
+    o.start(t); s.start(t);
+    return () => release(g, [o, s], 0.15);
+  }
+  function holdSing(volume) {
+    const t = ctx.currentTime, g = ctx.createGain();
+    g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(0.3 * volume, t + 0.1);
+    g.connect(ctx.destination);
+    const o = ctx.createOscillator(), lfo = ctx.createOscillator(), lg = ctx.createGain(), f = ctx.createBiquadFilter();
+    o.type = "sawtooth"; o.frequency.value = 220; lfo.frequency.value = 5; lg.gain.value = 3;
+    lfo.connect(lg); lg.connect(o.frequency);
+    f.type = "bandpass"; f.frequency.value = 800; f.Q.value = 1.5; // a rough "а" vowel
+    o.connect(f); f.connect(g); o.start(t); lfo.start(t);
+    return () => release(g, [o, lfo], 0.15);
+  }
+  const midiFreq = (m) => 440 * Math.pow(2, (m - 69) / 12);
+
   // Karplus–Strong plucked string: a burst of noise circulating through a short, slightly lossy delay line.
   function pluck(t, f, gain) {
     const rate = ctx.sampleRate, n = Math.round(rate / f), len = Math.round(rate * 2.5);
@@ -250,6 +300,8 @@
       this.el.append(this.canvas, bar);
       this.flashes = {};
       this.canvas.addEventListener("pointerdown", (ev) => this.tap(ev));
+      const endTap = () => { if (this.stopTap) { this.stopTap(); this.stopTap = null; } };
+      ["pointerup", "pointercancel", "lostpointercapture"].forEach((e) => this.canvas.addEventListener(e, endTap));
       this.button = bar.querySelector(".player-play");
       const range = bar.querySelector("input[type=range]");
       const bpmLabel = bar.querySelector(".player-bpm");
@@ -492,14 +544,17 @@
       const target = (this.targets || []).find((tg) => tg.inside(x, y));
       if (!target) return;
       ev.preventDefault();
-      this.hit(target.key);
+      this.stopTap = this.hit(target.key);
+      if (this.stopTap) this.canvas.setPointerCapture(ev.pointerId);
     }
 
     // One hit from any input: sound, flash, and in Play mode a verdict against the nearest expected note.
+    // A piano key keeps sounding until the returned function is called; drums are one-shot.
     hit(key, soundKey) {
       audio();
       activePlayer = this;
-      if (this.kind === "piano") pianoNote(ctx.currentTime, key, 0.5);
+      let stop;
+      if (this.kind === "piano") stop = holdNote(midiFreq(key));
       else DRUM_SOUND[soundKey || key](ctx.currentTime);
       let color = COLORS.flash;
       if (this.mode === "play" && this.playing) color = this.judge(key) ? COLORS.good : COLORS.bad;
@@ -508,6 +563,7 @@
         this.draw(IDLE);
         setTimeout(() => !this.playing && this.draw(IDLE), 250);
       }
+      return stop;
     }
 
     tolerance() {
@@ -896,8 +952,12 @@
       el.append(this.canvas, bar);
       this.info = bar.querySelector(".lab-info");
       bar.querySelector(".lab-all").addEventListener("click", () => this.playAll());
-      bar.querySelector(".lab-sum").addEventListener("click", () =>
-        this.play(1320, "1320 Гц — это уже не ля, а почти ми третьей октавы: частоты умножаются, а не складываются"));
+      holdButton(bar.querySelector(".lab-sum"), () => {
+        this.freq = 1320;
+        this.text = "1320 Гц — это уже не ля, а почти ми третьей октавы: частоты умножаются, а не складываются";
+        this.draw();
+        return holdNote(1320);
+      });
       holdable(this.canvas, (x) => {
         const i = Math.floor((x / this.w) * OCTAVES.length);
         const [name, f] = OCTAVES[Math.max(0, Math.min(OCTAVES.length - 1, i))];
@@ -986,11 +1046,13 @@
       el.append(this.canvas, bar);
       this.info = bar.querySelector(".lab-info");
       bar.querySelector("button").addEventListener("click", () => this.play());
-      this.canvas.addEventListener("pointerdown", (ev) => {
-        const box = this.canvas.getBoundingClientRect();
-        if (ev.clientY - box.top > this.boxBottom) return;
-        this.pick = Math.max(0, Math.min(6, Math.floor(((ev.clientX - box.left) / this.w) * 7)));
-        this.play();
+      holdable(this.canvas, (x, y) => {
+        if (y > this.boxBottom) return;
+        this.pick = Math.max(0, Math.min(6, Math.floor((x / this.w) * 7)));
+        this.draw();
+        const [, pn, q] = INTERVALS[this.pick];
+        const stops = [holdNote(DO4), holdNote((DO4 * pn) / q)];
+        return () => stops.forEach((s) => s());
       });
       this.resize();
       window.addEventListener("resize", () => this.resize());
@@ -1079,9 +1141,9 @@
         '<span class="player-score lab-info"></span>';
       el.append(this.canvas, loud, high);
       this.info = high.querySelector(".lab-info");
-      loud.querySelectorAll("[data-db]").forEach((b) => b.addEventListener("click", () => this.level(Number(b.dataset.db))));
+      loud.querySelectorAll("[data-db]").forEach((b) => holdButton(b, () => this.level(Number(b.dataset.db))));
       loud.querySelector("[data-two]").addEventListener("click", () => this.two());
-      high.querySelectorAll("[data-hz]").forEach((b) => b.addEventListener("click", () => this.hear(Number(b.dataset.hz))));
+      high.querySelectorAll("[data-hz]").forEach((b) => holdButton(b, () => this.hear(Number(b.dataset.hz))));
       this.resize();
       window.addEventListener("resize", () => this.resize());
     }
@@ -1109,10 +1171,11 @@
     level(db) {
       audio();
       this.db = db;
-      this.sine(440, ctx.currentTime + 0.02, 1, REF * Math.pow(10, db / 20));
+      const stop = holdSine(440, REF * Math.pow(10, db / 20));
       this.info.textContent = db === 0 ? "исходный уровень" :
         `${db} дБ: мощность в ${Math.round(Math.pow(10, -db / 10))} раз меньше, а на слух — примерно в ${(Math.pow(2, -db / 10)).toFixed(1).replace(".", ",").replace(",0", "")} раза тише`;
       this.draw();
+      return stop;
     }
 
     two() {
@@ -1129,9 +1192,10 @@
 
     hear(f) {
       audio();
-      this.sine(f, ctx.currentTime + 0.02, 1.5, REF * 0.5);
+      const stop = holdSine(f, REF * 0.5);
       this.info.textContent = `${f} Гц — ${f <= 100 ? "в маленьких динамиках может быть не слышно, лучше в наушниках" :
         f >= 12000 ? "слышите? С возрастом верхняя граница снижается, это нормально" : "это слышат все"}`;
+      return stop;
     }
 
     draw() {
@@ -1188,12 +1252,12 @@
       presets.innerHTML = "<b>Готовые:</b>" + CHORD_PRESETS.map(([n], i) => `<button type="button" data-preset="${i}">${n}</button>`).join("");
       el.append(this.canvas, bar, presets);
       this.info = bar.querySelector(".lab-info");
-      bar.querySelector("[data-act=together]").addEventListener("click", () => this.play(false));
+      holdButton(bar.querySelector("[data-act=together]"), () => this.hold());
       bar.querySelector("[data-act=apart]").addEventListener("click", () => this.play(true));
       bar.querySelector("[data-act=clear]").addEventListener("click", () => { this.chosen.clear(); this.draw(); });
-      presets.querySelectorAll("[data-preset]").forEach((b) => b.addEventListener("click", () => {
+      presets.querySelectorAll("[data-preset]").forEach((b) => holdButton(b, () => {
         this.chosen = new Set(CHORD_PRESETS[Number(b.dataset.preset)][1]);
-        this.play(false);
+        return this.hold();
       }));
       this.canvas.addEventListener("pointerdown", (ev) => {
         const box = this.canvas.getBoundingClientRect();
@@ -1235,6 +1299,16 @@
       return undefined;
     }
 
+    // The chosen keys sound together for as long as the button is held.
+    hold() {
+      if (!this.chosen.size) return null;
+      const notes = [...this.chosen];
+      const stops = notes.map((m) => holdNote(midiFreq(m)));
+      notes.forEach((m) => this.lit.set(m, Infinity));
+      this.draw();
+      return () => { stops.forEach((s) => s()); notes.forEach((m) => this.lit.delete(m)); this.draw(); };
+    }
+
     play(apart) {
       if (!this.chosen.size) return;
       audio();
@@ -1252,7 +1326,7 @@
       const g = this.g, { top, keysH, kw } = this;
       g.fillStyle = COLORS.bg; g.fillRect(0, 0, this.w, this.h);
       const now = performance.now();
-      const fill = (m, idle) => (this.lit.has(m) && now - this.lit.get(m) < 400 ? COLORS.flash : this.chosen.has(m) ? (isBlack(m) ? COLORS.right : "#b7d0f0") : idle);
+      const fill = (m, idle) => (this.lit.has(m) && (this.lit.get(m) === Infinity || now - this.lit.get(m) < 400) ? COLORS.flash : this.chosen.has(m) ? (isBlack(m) ? COLORS.right : "#b7d0f0") : idle);
       g.textAlign = "center";
       for (let m = this.lo; m <= this.hi; m++) {
         if (isBlack(m)) continue;
@@ -1354,17 +1428,40 @@
       bar.querySelectorAll("[data-mark]").forEach((b) => b.addEventListener("click", () => { this.part = STRING_MARKS[b.dataset.mark][0]; this.pluck(); }));
       const ten = bar.querySelector("input");
       ten.addEventListener("input", () => { this.tension = ten.value / 100; bar.querySelector(".lab-ten").textContent = ten.value; this.update(); });
+      // Drag the finger along the string (it snaps to the simple ratios); a short click plucks the blue part
+      // or, on the grey part, lifts the finger.
+      let press = null;
+      const posAt = (ev) => (ev.clientX - this.canvas.getBoundingClientRect().left - this.x0) / this.len;
+      const setFinger = (pos) => {
+        let part = Math.max(0.2, Math.min(1, 1 - pos));
+        const snap = STRING_MARKS.find(([share]) => Math.abs(share - part) < 0.015);
+        if (snap) part = snap[0];
+        this.part = part;
+        this.update();
+      };
       this.canvas.addEventListener("pointerdown", (ev) => {
-        const box = this.canvas.getBoundingClientRect();
-        const x = ev.clientX - box.left, y = ev.clientY - box.top;
-        if (y > this.y0 + 26 || y < this.y0 - 40) return;
-        // left of the finger presses it there; anywhere on the sounding part plucks
-        const pos = (x - this.x0) / this.len;
-        if (pos >= 0 && pos < 1 - this.part) { this.part = 1; this.update(); return; }
-        if (pos < 0 || pos > 1) return;
-        if (Math.abs(pos - (1 - this.part)) < 0.03 || ev.shiftKey) this.part = Math.max(0.2, 1 - pos);
-        this.pluck();
+        const y = ev.clientY - this.canvas.getBoundingClientRect().top;
+        if (y > this.y0 + 30 || y < this.y0 - 36) return;
+        const pos = posAt(ev);
+        if (pos < -0.02 || pos > 1.02) return;
+        const onFinger = Math.abs(pos - (1 - this.part)) * this.len < 18;
+        press = { x: ev.clientX, pos, onFinger, moved: false };
+        this.canvas.setPointerCapture(ev.pointerId);
+        ev.preventDefault();
       });
+      this.canvas.addEventListener("pointermove", (ev) => {
+        if (!press) return;
+        if (!press.moved && Math.abs(ev.clientX - press.x) > 4) press.moved = true;
+        if (press.moved) setFinger(posAt(ev));
+      });
+      const end = () => {
+        if (!press) return;
+        if (!press.moved && !press.onFinger) {
+          if (press.pos < 1 - this.part) { this.part = 1; this.update(); } else this.pluck();
+        }
+        press = null;
+      };
+      ["pointerup", "pointercancel"].forEach((e) => this.canvas.addEventListener(e, end));
       this.canvas.addEventListener("contextmenu", (ev) => ev.preventDefault());
       this.resize();
       window.addEventListener("resize", () => this.resize());
@@ -1425,12 +1522,12 @@
         g.stroke();
       }
       g.globalAlpha = 1;
-      if (this.part < 1) {
-        g.fillStyle = "#7eaee6"; g.strokeStyle = COLORS.right; g.lineWidth = 1.5;
+      {
+        g.fillStyle = this.part < 1 ? "#7eaee6" : "#e3eaf7"; g.strokeStyle = COLORS.right; g.lineWidth = 1.5;
         g.beginPath(); g.arc(fx, y0 - 14, 9, 0, Math.PI * 2); g.fill(); g.stroke();
       }
       g.fillStyle = COLORS.muted; g.font = "11px Segoe UI, Arial, sans-serif"; g.textAlign = "left";
-      g.fillText("щёлкните по синей части, чтобы щипнуть; по серой — чтобы убрать палец; кнопки ставят палец в нужное место", 8, 16);
+      g.fillText("тяните палец вдоль струны; щелчок по синей части — щипок, по серой — убрать палец", 8, 16);
     }
   }
 
@@ -1472,17 +1569,26 @@
         if (i === undefined) return;
         drag = { i, y: ev.clientY, moved: false };
         this.canvas.setPointerCapture(ev.pointerId);
+        if (this.mode === "blow") { audio(); drag.stop = this.blow(i); }
       });
       this.canvas.addEventListener("pointermove", (ev) => {
         if (!drag) return;
-        if (Math.abs(ev.clientY - drag.y) > 5) drag.moved = true;
+        if (Math.abs(ev.clientY - drag.y) > 5 && !drag.moved) {
+          drag.moved = true;
+          if (drag.stop) { drag.stop(); drag.stop = null; }
+        }
         if (!drag.moved) return;
         const box = this.canvas.getBoundingClientRect();
         const { top, bh } = this.geom();
         this.levels[drag.i] = Math.max(0.02, Math.min(0.92, 1 - (ev.clientY - box.top - top) / bh));
         this.draw();
       });
-      this.canvas.addEventListener("pointerup", () => { if (drag && !drag.moved) this.sound(drag.i); drag = null; });
+      const end = () => {
+        if (drag && drag.stop) drag.stop();
+        else if (drag && !drag.moved && this.mode === "tap") this.sound(drag.i);
+        drag = null;
+      };
+      ["pointerup", "pointercancel"].forEach((e) => this.canvas.addEventListener(e, end));
       this.resize();
       window.addEventListener("resize", () => this.resize());
     }
@@ -1503,6 +1609,15 @@
       this.w = w; this.h = h;
       this.draw();
     }
+    blow(i) {
+      const f = blowFreq(this.levels[i]);
+      this.info.textContent = `дуем: ≈ ${Math.round(f)} Гц — чем больше воды, тем выше`;
+      this.lit = { i, at: Infinity };
+      this.draw();
+      const stop = holdBlow(f);
+      return () => { stop(); this.lit = null; this.draw(); };
+    }
+
     sound(i) {
       audio();
       const t = ctx.currentTime, level = this.levels[i];
@@ -1524,7 +1639,7 @@
       g.fillStyle = COLORS.bg; g.fillRect(0, 0, this.w, this.h);
       g.fillStyle = COLORS.muted; g.font = "11px Segoe UI, Arial, sans-serif"; g.textAlign = "left";
       g.fillText("щелчок по бутылке — звук; потяните вверх или вниз — меняется уровень воды", 8, 16);
-      const lit = this.lit && performance.now() - this.lit.at < 300 ? this.lit.i : -1;
+      const lit = this.lit && (this.lit.at === Infinity || performance.now() - this.lit.at < 300) ? this.lit.i : -1;
       this.levels.forEach((level, i) => {
         const x = gap + i * (bw + gap);
         g.fillStyle = i === lit ? "#fff3cc" : "#fff";
@@ -1560,7 +1675,7 @@
         '<label>Громкость <input type="range" min="10" max="100" value="60"></label>';
       el.append(this.canvas, bar);
       bar.querySelector("[data-a=hit]").addEventListener("click", () => this.hit());
-      bar.querySelector("[data-a=sing]").addEventListener("click", () => this.sing());
+      holdButton(bar.querySelector("[data-a=sing]"), () => this.sing());
       const vol = bar.querySelector("input");
       vol.addEventListener("input", () => (this.volume = vol.value / 100));
       this.canvas.addEventListener("pointerdown", (ev) => {
@@ -1586,16 +1701,13 @@
       this.events.push({ at: performance.now(), strength: v });
     }
     sing() {
-      audio();
-      const t = ctx.currentTime, v = this.volume;
-      const o = ctx.createOscillator(), lfo = ctx.createOscillator(), lg = ctx.createGain(), f = ctx.createBiquadFilter();
-      o.type = "sawtooth"; o.frequency.value = 220; lfo.frequency.value = 5; lg.gain.value = 3;
-      lfo.connect(lg); lg.connect(o.frequency);
-      f.type = "bandpass"; f.frequency.value = 800; f.Q.value = 1.5; // a rough "а" vowel
-      o.connect(f); f.connect(envGain(t, 0.3 * v, 1.6));
-      o.start(t); lfo.start(t); o.stop(t + 1.7); lfo.stop(t + 1.7);
-      for (let k = 0; k < 6; k++) this.events.push({ at: performance.now() + k * 250, strength: v * 0.6 });
+      const stop = holdSing(this.volume);
+      const wave = () => this.events.push({ at: performance.now(), strength: this.volume * 0.6 });
+      wave();
+      const timer = setInterval(wave, 250);
+      return () => { clearInterval(timer); stop(); };
     }
+
     loop() {
       const now = performance.now();
       const travel = 700; // ms on screen for the trip from pot to bowl: slowed down, really ~1 ms
@@ -1652,8 +1764,14 @@
     const key = p.kind === "piano" ? p.pianoKeyCodes && p.pianoKeyCodes[ev.code] : DRUM_KEYS[ev.code];
     if (key === undefined) return;
     ev.preventDefault();
-    p.hit(key);
+    const stop = p.hit(key);
+    if (stop) heldKeys[ev.code] = stop;
   });
+  const heldKeys = {};
+  document.addEventListener("keyup", (ev) => {
+    if (heldKeys[ev.code]) { heldKeys[ev.code](); delete heldKeys[ev.code]; }
+  });
+  const heldMidi = {};
 
   let midiRequested = false;
   function requestMidi() {
@@ -1662,8 +1780,10 @@
     navigator.requestMIDIAccess().then((access) => {
       const listen = (input) => (input.onmidimessage = (msg) => {
         const [status, note, velocity] = msg.data;
+        const off = (status & 0xf0) === 0x80 || ((status & 0xf0) === 0x90 && velocity === 0);
+        if (off && heldMidi[note]) { heldMidi[note](); delete heldMidi[note]; return; }
         if ((status & 0xf0) !== 0x90 || velocity === 0 || !activePlayer) return;
-        if (activePlayer.kind === "piano") activePlayer.hit(note);
+        if (activePlayer.kind === "piano") heldMidi[note] = activePlayer.hit(note);
         else if (GM_DRUMS[note]) activePlayer.hit(KIT[GM_DRUMS[note]].pad || GM_DRUMS[note], GM_DRUMS[note]);
       });
       access.inputs.forEach(listen);

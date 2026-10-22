@@ -807,16 +807,27 @@
       bar.className = "player-controls";
       bar.innerHTML =
         '<button type="button" class="player-play">Щёлкнуть</button>' +
-        '<label>Свободный конец <input type="range" min="3" max="28" step="1"> <span class="lab-len"></span> см</label>' +
         '<span class="player-score lab-info"></span>';
       el.append(this.canvas, bar);
-      const range = bar.querySelector("input");
-      range.value = this.free;
-      this.lenLabel = bar.querySelector(".lab-len");
       this.info = bar.querySelector(".lab-info");
-      range.addEventListener("input", () => { this.free = Number(range.value); this.pluckedAt = null; this.update(); });
       bar.querySelector("button").addEventListener("click", () => this.pluck());
-      this.canvas.addEventListener("pointerdown", () => this.pluck());
+      // Drag the ruler sideways to push it out over the edge or back onto the table; a short click flicks it.
+      let press = null;
+      this.canvas.addEventListener("pointerdown", (ev) => {
+        press = { x: ev.clientX, free: this.free, moved: false };
+        this.canvas.setPointerCapture(ev.pointerId);
+        ev.preventDefault();
+      });
+      this.canvas.addEventListener("pointermove", (ev) => {
+        if (!press) return;
+        const dx = ev.clientX - press.x;
+        if (!press.moved && Math.abs(dx) > 4) press.moved = true;
+        if (!press.moved) return;
+        const free = Math.max(3, Math.min(28, Math.round(press.free + dx / this.cm)));
+        if (free !== this.free) { this.free = free; this.pluckedAt = null; this.update(); }
+      });
+      const end = () => { if (press && !press.moved) this.pluck(); press = null; };
+      ["pointerup", "pointercancel"].forEach((e) => this.canvas.addEventListener(e, end));
       this.resize();
       window.addEventListener("resize", () => this.resize());
     }
@@ -834,7 +845,6 @@
 
     update() {
       const f = this.freq();
-      this.lenLabel.textContent = this.free;
       const f2 = Math.round(f * SECOND_MODE);
       this.info.textContent = `≈ ${f < 20 ? f.toFixed(1).replace(".", ",") : Math.round(f)} колебаний в секунду — ` +
         (f < 20 ? `само качание не слышно (ниже 20), слышны стук о стол и гул второго изгиба ≈ ${f2} Гц`
@@ -893,6 +903,7 @@
       const g = this.g, w = this.w, h = this.h;
       g.fillStyle = COLORS.bg; g.fillRect(0, 0, w, h);
       const cm = (w - 40) / 40; // pixels per centimetre; 40 cm of scene
+      this.cm = cm;
       const edge = 20 + 12 * cm; // table edge
       const y0 = h * 0.42;
       const freeLen = this.free * cm;
@@ -928,6 +939,8 @@
       g.beginPath(); g.moveTo(edge, h - 22); g.lineTo(edge + freeLen, h - 22); g.stroke();
       g.fillStyle = COLORS.text; g.font = "bold 12px Segoe UI, Arial, sans-serif";
       g.fillText(`${this.free} см свободно`, edge + freeLen / 2, h - 8);
+      g.fillStyle = COLORS.muted; g.font = "11px Segoe UI, Arial, sans-serif"; g.textAlign = "left";
+      g.fillText("тяните линейку вправо или влево; щелчок — щёлкнуть по концу", 8, 16);
     }
   }
 

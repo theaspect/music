@@ -859,12 +859,25 @@
     freq() { return RULER_K / (this.free / 100) ** 2; }
 
     resize() {
-      const w = this.el.clientWidth, h = Math.round(Math.min(260, w * 0.45));
+      const w = this.el.clientWidth, sceneH = Math.round(Math.min(260, w * 0.45)), h = sceneH + 140;
       const dpr = window.devicePixelRatio || 1;
       this.canvas.width = w * dpr; this.canvas.height = h * dpr; this.canvas.style.height = h + "px";
       this.g.setTransform(dpr, 0, 0, dpr, 0, 0);
-      this.w = w; this.h = h;
+      this.w = w; this.h = h; this.sceneH = sceneH;
       this.update();
+      // the bending modes below the scene move continuously, but only while the lab is on screen
+      if (!this.observer && window.IntersectionObserver) {
+        this.observer = new IntersectionObserver(([entry]) => {
+          this.visible = entry.isIntersecting;
+          const tick = () => {
+            if (!this.visible) return;
+            this.draw(this.pluckedAt ? (performance.now() - this.pluckedAt) / 1000 : 0);
+            requestAnimationFrame(tick);
+          };
+          if (this.visible) requestAnimationFrame(tick);
+        });
+        this.observer.observe(this.canvas);
+      }
     }
 
     update() {
@@ -924,8 +937,9 @@
     }
 
     draw(age) {
-      const g = this.g, w = this.w, h = this.h;
-      g.fillStyle = COLORS.bg; g.fillRect(0, 0, w, h);
+      const g = this.g, w = this.w, h = this.sceneH;
+      g.fillStyle = COLORS.bg; g.fillRect(0, 0, w, this.h);
+      this.drawModes(h);
       const cm = (w - 40) / 40; // pixels per centimetre; 40 cm of scene
       this.cm = cm;
       const edge = 20 + 12 * cm; // table edge
@@ -933,7 +947,7 @@
       const freeLen = this.free * cm;
       // table and hand
       g.fillStyle = "#f6f6f2"; g.strokeStyle = COLORS.line; g.lineWidth = 1.5;
-      g.fillRect(0, y0 + 4, edge, h - y0); g.strokeRect(-1, y0 + 4, edge + 1, h - y0);
+      g.fillRect(0, y0 + 4, edge, h - y0 - 8); g.strokeRect(-1, y0 + 4, edge + 1, h - y0 - 8);
       const clamp = edge - (RULER_CM - this.free) * cm; // where the ruler's far end lies on the table
       g.fillStyle = "#7eaee6"; g.strokeStyle = COLORS.right;
       roundRect(g, Math.max(4, edge - 7 * cm), y0 - 18, 5 * cm, 16, 5); g.fill(); g.stroke();
@@ -964,8 +978,49 @@
       g.fillStyle = COLORS.text; g.font = "bold 12px Segoe UI, Arial, sans-serif";
       g.fillText(`${this.free} см свободно`, edge + freeLen / 2, h - 8);
       if (!this.pluckedAt || age > 2) arrows(g, edge + freeLen - 10, y0 - 30, "тяните");
-      g.fillStyle = COLORS.muted; g.font = "11px Segoe UI, Arial, sans-serif"; g.textAlign = "left";
     }
+
+    // The first two bending modes of a clamped ruler, in slow motion: the second bends as an S around a node
+    // that stays still, about 0.78 of the free length from the edge, and moves 6.27 times as often.
+    drawModes(top) {
+      const g = this.g, w = this.w, f = this.freq();
+      g.strokeStyle = COLORS.line; g.lineWidth = 1;
+      g.beginPath(); g.moveTo(0, top + 0.5); g.lineTo(w, top + 0.5); g.stroke();
+      const now = performance.now() / 1000;
+      const panels = [[1, `1-й изгиб: качается целиком — ${hz(f)} Гц`, 0.4],
+                      [2, `2-й изгиб: гнётся волной, в 6,3 раза чаще — ${hz(f * SECOND_MODE)} Гц`, 0.4 * SECOND_MODE]];
+      const half = w / 2;
+      panels.forEach(([n, title, visHz], i) => {
+        const x0 = 16 + i * half, len = half - 40, y = top + 70;
+        g.fillStyle = COLORS.text; g.font = `bold ${Math.min(12, w / 55)}px Segoe UI, Arial, sans-serif`; g.textAlign = "left";
+        g.fillText(title, x0, top + 20);
+        g.fillStyle = "#f6f6f2"; g.strokeStyle = COLORS.line; g.fillRect(x0, y - 14, 10, 28); g.strokeRect(x0, y - 14, 10, 28);
+        const shapeAt = (s) => cantilever(n, s) / cantilever(n, 1);
+        const line = (k, alpha, width) => {
+          g.globalAlpha = alpha; g.strokeStyle = COLORS.right; g.lineWidth = width;
+          g.beginPath();
+          for (let s = 0; s <= 1.0001; s += 0.02) g.lineTo(x0 + 10 + s * len, y - 26 * k * shapeAt(s));
+          g.stroke(); g.globalAlpha = 1;
+        };
+        line(1, 0.15, 3); line(-1, 0.15, 3);
+        line(Math.sin(2 * Math.PI * visHz * now), 1, 4);
+        if (n === 2) {
+          const nx = x0 + 10 + 0.7834 * len;
+          g.fillStyle = COLORS.bad; g.beginPath(); g.arc(nx, y, 4, 0, Math.PI * 2); g.fill();
+          g.font = "11px Segoe UI, Arial, sans-serif"; g.textAlign = "center";
+          g.fillText("неподвижная точка", nx, y + 40);
+        }
+      });
+      g.fillStyle = COLORS.muted; g.font = "11px Segoe UI, Arial, sans-serif"; g.textAlign = "left";
+      g.fillText("показано замедленно; настоящая линейка делает оба движения одновременно, и мы слышим их сумму", 16, top + 132);
+    }
+  }
+
+  // Mode shapes of a clamped–free beam (Euler–Bernoulli): s is the share of the free length from the clamp.
+  function cantilever(n, s) {
+    const [b, sigma] = n === 1 ? [1.875104, 0.734096] : [4.694091, 1.018467];
+    const x = b * s;
+    return Math.cosh(x) - Math.cos(x) - sigma * (Math.sinh(x) - Math.sin(x));
   }
 
 

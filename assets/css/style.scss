@@ -9,3 +9,34 @@ table img {
   height: 100px;
   object-fit: contain;
 }
+
+// Interactive players (assets/js/player.js)
+.player {
+  margin: 1em 0 1.5em;
+  border: 1px solid #e2e2e2;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #fafaf7;
+}
+.player canvas {
+  display: block;
+  width: 100%;
+}
+.player-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  align-items: center;
+  padding: 8px 12px;
+  font-size: 14px;
+  border-top: 1px solid #e2e2e2;
+}
+.player-play {
+  font: inherit;
+  padding: 4px 14px;
+  border: 1px solid #2f72c9;
+  border-radius: 6px;
+  background: #2f72c9;
+  color: #fff;
+  cursor: pointer;
+}

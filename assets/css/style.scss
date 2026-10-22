@@ -40,3 +40,25 @@ table img {
   color: #fff;
   cursor: pointer;
 }
+.player-mode {
+  display: inline-flex;
+  border: 1px solid #2f72c9;
+  border-radius: 6px;
+  overflow: hidden;
+}
+.player-mode button {
+  font: inherit;
+  padding: 4px 10px;
+  border: 0;
+  background: #fff;
+  color: #2f72c9;
+  cursor: pointer;
+}
+.player-mode button.on {
+  background: #2f72c9;
+  color: #fff;
+}
+.player-score {
+  color: #555;
+  font-size: 13px;
+}

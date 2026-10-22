@@ -5,6 +5,8 @@
 //   <div class="player" data-kind="piano" data-bpm="90" data-range="до4-ми5"
 //        data-notes="до4 до4 соль4 соль4 ля4 ля4 соль4:2"></div>
 // On GitHub's own Markdown view scripts do not run, the div stays empty and the PNG above it remains.
+// Modes: "Слушать" plays the pattern; "Играть" keeps it silent and judges the reader's hits, which come from
+// taps on the canvas, the computer keyboard (by physical key, so any layout works) or a MIDI kit/keyboard.
 (function () {
   "use strict";
 
@@ -12,23 +14,34 @@
   const LOOKAHEAD = 0.12; // seconds of audio scheduled ahead of the clock
   const IDLE = -0.5; // position shown while stopped: the first bar waits just above the hit line
   const COLORS = { right: "#2f72c9", left: "#e0892b", foot: "#555b66", pad: "#cfe0f7", cymbal: "#eef3fb",
-                   line: "#c9c9c0", text: "#111", muted: "#666", flash: "#ffd166", bg: "#fafaf7" };
+                   line: "#c9c9c0", text: "#111", muted: "#666", flash: "#ffd166", bg: "#fafaf7", good: "#2a9d4b", bad: "#d64545" };
 
   // Rows follow the kit diagram in 3.4 (top: crash, tom, ride; bottom: hi-hat, snare, tom, floor tom) in a 760 × 250 box
   // where every pad and pedal has a column of its own, so lanes never overlap. Pedals are narrow upright
   // rectangles (x, y = top centre), which fit into the bottom row between the pads.
   const KIT = {
-    cr: { name: "Крэш", x: 190, y: 70, r: 38, cymbal: true, hand: "right" },
-    t1: { name: "Том 1", x: 345, y: 72, r: 38, hand: "right" },
-    rd: { name: "Райд", x: 585, y: 70, r: 38, cymbal: true, hand: "right" },
-    hh: { name: "Хай-хэт", short: "Хэт", x: 60, y: 175, r: 38, cymbal: true, hand: "right" },
-    oh: { name: "Хай-хэт", x: 60, y: 175, r: 38, cymbal: true, hand: "right", pad: "hh" },
-    sn: { name: "Малый", x: 265, y: 180, r: 38, hand: "left" },
-    t2: { name: "Том 2", x: 425, y: 180, r: 38, hand: "right" },
-    ft: { name: "Напольный", short: "Нап.", x: 680, y: 175, r: 38, hand: "right" },
-    hp: { name: "Хэт", x: 125, y: 150, pedal: true },
-    kk: { name: "Бочка", x: 505, y: 150, pedal: true },
+    cr: { name: "Крэш", x: 168, y: 70, r: 38, cymbal: true, hand: "right" },
+    t1: { name: "Том 1", short: "Том 1 (выс.)", x: 380, y: 70, r: 38, hand: "right" },
+    rd: { name: "Райд", x: 592, y: 70, r: 38, cymbal: true, hand: "right" },
+    hh: { name: "Хай-хэт", short: "Хэт", x: 100, y: 178, r: 38, cymbal: true, hand: "right" },
+    oh: { name: "Хай-хэт", x: 100, y: 178, r: 38, cymbal: true, hand: "right", pad: "hh" },
+    sn: { name: "Малый", x: 305, y: 178, r: 38, hand: "left" },
+    t2: { name: "Том 2", short: "Том 2 (сред.)", x: 455, y: 178, r: 38, hand: "right" },
+    ft: { name: "Напольный", short: "Нап.", x: 660, y: 178, r: 38, hand: "right" },
+    hp: { name: "Хэт", x: 235, y: 148, pedal: true },
+    kk: { name: "Бочка", x: 525, y: 148, pedal: true },
   };
+
+  // Computer keys by KeyboardEvent.code. Drums follow the kit rows; piano is the usual A-row layout from the lowest до.
+  const DRUM_KEYS = { KeyQ: "cr", KeyW: "t1", KeyE: "rd", KeyA: "hh", KeyZ: "hp", KeyS: "sn", KeyD: "t2", Space: "kk", KeyF: "ft" };
+  const KEY_LABELS = { KeyQ: "Q", KeyW: "W", KeyE: "E", KeyA: "A", KeyZ: "Z", KeyS: "S", KeyD: "D", Space: "␣", KeyF: "F",
+                       KeyT: "T", KeyG: "G", KeyY: "Y", KeyH: "H", KeyU: "U", KeyJ: "J", KeyK: "K", KeyO: "O", KeyL: "L",
+                       KeyP: "P", Semicolon: ";", Quote: "'" };
+  const PIANO_KEYS = ["KeyA", "KeyW", "KeyS", "KeyE", "KeyD", "KeyF", "KeyT", "KeyG", "KeyY", "KeyH", "KeyU", "KeyJ",
+                      "KeyK", "KeyO", "KeyL", "KeyP", "Semicolon", "Quote"];
+  // General MIDI drum notes, which electronic kits send over USB.
+  const GM_DRUMS = { 35: "kk", 36: "kk", 37: "sn", 38: "sn", 40: "sn", 42: "hh", 44: "hp", 46: "oh", 41: "ft", 43: "ft",
+                     45: "t2", 47: "t2", 48: "t1", 50: "t1", 49: "cr", 52: "cr", 55: "cr", 57: "cr", 51: "rd", 53: "rd", 59: "rd" };
 
   // ---------- audio ----------
   let ctx = null;
@@ -135,7 +148,7 @@
         events.push({ beat: i / perBeat, key, hand, label: ch === "R" ? "П" : ch === "L" ? "Л" : "" });
       });
     });
-    return { events, length: Math.ceil(length / 4) * 4 };
+    return { events, length: Math.ceil(length / 4) * 4, minGap: minGap(events) };
   }
 
   function parsePiano(el) {
@@ -148,7 +161,14 @@
       beat += d;
     });
     const [lo, hi] = (el.dataset.range || "до4-до5").split("-").map((n) => parseNote(n).midi);
-    return { events, length: Math.ceil(beat / 4) * 4, lo, hi };
+    return { events, length: Math.ceil(beat / 4) * 4, lo, hi, minGap: minGap(events) };
+  }
+
+  function minGap(events) {
+    const beats = [...new Set(events.map((e) => e.beat))].sort((a, b) => a - b);
+    let gap = 1;
+    for (let i = 1; i < beats.length; i++) gap = Math.min(gap, beats[i] - beats[i - 1]);
+    return gap;
   }
 
   // ---------- player ----------
@@ -160,6 +180,10 @@
       this.bpm = Number(el.dataset.bpm || 70);
       this.metronome = this.kind === "drums";
       this.playing = false;
+      this.mode = "listen";
+      this.judged = new Map();
+      this.score = { hit: 0, early: 0, miss: 0 };
+      this.marks = [];
       this.build();
       this.resize();
       window.addEventListener("resize", () => this.resize());
@@ -171,9 +195,12 @@
       const bar = document.createElement("div");
       bar.className = "player-controls";
       bar.innerHTML =
-        '<button type="button" class="player-play">▶ Играть</button>' +
+        '<span class="player-mode"><button type="button" data-mode="listen" class="on">Слушать</button>' +
+        '<button type="button" data-mode="play">Играть самому</button></span>' +
+        '<button type="button" class="player-play">▶ Старт</button>' +
         '<label>Темп <input type="range" min="40" max="160" step="5"> <span class="player-bpm"></span> BPM</label>' +
-        '<label><input type="checkbox" class="player-click"> метроном</label>';
+        '<label><input type="checkbox" class="player-click"> метроном</label>' +
+        '<span class="player-score"></span>';
       this.el.append(this.canvas, bar);
       this.flashes = {};
       this.canvas.addEventListener("pointerdown", (ev) => this.tap(ev));
@@ -187,6 +214,14 @@
       this.button.addEventListener("click", () => (this.playing ? this.stop() : this.start()));
       range.addEventListener("input", () => { this.setBpm(Number(range.value)); bpmLabel.textContent = this.bpm; });
       clickBox.addEventListener("change", () => (this.metronome = clickBox.checked));
+      this.scoreLabel = bar.querySelector(".player-score");
+      bar.querySelectorAll(".player-mode button").forEach((b) => b.addEventListener("click", () => {
+        bar.querySelectorAll(".player-mode button").forEach((x) => x.classList.toggle("on", x === b));
+        this.mode = b.dataset.mode;
+        if (this.mode === "play") { this.metronome = clickBox.checked = true; requestMidi(); }
+        this.resetScore();
+        if (!this.playing) this.draw(IDLE);
+      }));
     }
 
     resize() {
@@ -219,6 +254,8 @@
       document.querySelectorAll(".player").forEach((el) => el._player !== this && el._player && el._player.stop());
       this.playing = true;
       this.button.textContent = "■ Стоп";
+      this.resetScore();
+      activePlayer = this;
       // Start one window early: notes fall in from the top and the metronome counts in.
       this.anchorBeat = -BEATS_VISIBLE;
       this.anchorTime = ctx.currentTime + 0.05;
@@ -227,7 +264,9 @@
       this.schedule();
       const frame = () => {
         if (!this.playing) return;
-        this.draw(this.beatAt(ctx.currentTime));
+        const cur = this.beatAt(ctx.currentTime);
+        if (this.mode === "play") this.findMisses(cur);
+        this.draw(cur);
         requestAnimationFrame(frame);
       };
       requestAnimationFrame(frame);
@@ -236,7 +275,7 @@
     stop() {
       this.playing = false;
       clearInterval(this.timer);
-      this.button.textContent = "▶ Играть";
+      this.button.textContent = "▶ Старт";
       this.draw(IDLE);
     }
 
@@ -259,6 +298,7 @@
     }
 
     sound(e, t) {
+      if (this.mode === "play") return;
       if (this.kind === "piano") pianoNote(t, e.midi, (e.dur * 60) / this.bpm * 0.95);
       else DRUM_SOUND[e.key](t);
     }
@@ -268,10 +308,10 @@
       const L = this.song.length;
       const out = [];
       for (let loop = Math.max(0, Math.floor(a / L) - 1); loop * L < b; loop++) {
-        this.song.events.forEach((e) => {
+        this.song.events.forEach((e, i) => {
           const beat = e.beat + loop * L;
           const end = beat + (e.dur || 0);
-          if (end >= a && beat < b) out.push({ ...e, beat });
+          if (end >= a && beat < b) out.push({ ...e, beat, id: loop + ":" + i });
         });
       }
       return out;
@@ -316,7 +356,7 @@
         const k = KIT[e.key].pad || e.key;
         const x = px(laneX[k]);
         const y = yOf(e.beat);
-        g.fillStyle = COLORS[e.hand] || COLORS.right;
+        g.fillStyle = this.noteColor(e, COLORS[e.hand] || COLORS.right);
         roundRect(g, x - laneW / 2 + 2, y - 7, laneW - 4, 14, 4);
         g.fill();
         if (e.key === "oh") {
@@ -342,29 +382,39 @@
       });
       g.strokeStyle = COLORS.text; g.lineWidth = 2;
       g.beginPath(); g.moveTo(0, highway); g.lineTo(w, highway); g.stroke();
+      this.liveMarks().forEach((m) => {
+        if (laneX[m.key] === undefined) return;
+        g.globalAlpha = m.fade;
+        g.fillStyle = COLORS.bad;
+        roundRect(g, px(laneX[m.key]) - laneW / 2 + 2, highway - 7 + m.offset * perBeat, laneW - 4, 14, 4);
+        g.fill();
+        g.globalAlpha = 1;
+      });
 
       // the kit: a ring closes in during the beat before a hit, the pad flashes on the hit
       const flash = new Set(this.occurrences(cur - 0.15, cur + 0.001)
         .filter((e) => this.playing && e.beat <= cur).map((e) => KIT[e.key].pad || e.key));
-      this.manualFlashes().forEach((k) => flash.add(k));
+      const manual = this.manualFlashes();
       this.targets = [];
       Object.entries(KIT).forEach(([k, kit]) => {
         if (kit.pad) return;
-        const on = flash.has(k);
+        const on = manual.get(k) || (flash.has(k) && this.mode === "listen" && COLORS.flash);
         g.globalAlpha = used.has(k) ? 1 : 0.35;
         if (kit.pedal) {
           const r = { x: px(kit.x) - 20 * s, y: py(kit.y), w: 40 * s, h: 70 * s };
-          g.fillStyle = on ? COLORS.flash : "#9aa1ad";
+          g.fillStyle = on || "#9aa1ad";
           roundRect(g, r.x, r.y, r.w, r.h, 6 * s);
           g.fill(); g.strokeStyle = COLORS.foot; g.lineWidth = 2; g.stroke();
           label(g, kit.name, px(kit.x), py(kit.y) + 84 * s, s);
+          this.keyHint(k, px(kit.x), py(kit.y) + 40 * s, s);
           this.targets.push({ key: k, inside: (x, y) => x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h });
         } else {
           const cx = px(kit.x), cy = py(kit.y), r = kit.r * s;
-          g.fillStyle = on ? COLORS.flash : kit.cymbal ? COLORS.cymbal : COLORS.pad;
+          g.fillStyle = on || (kit.cymbal ? COLORS.cymbal : COLORS.pad);
           g.beginPath(); g.arc(cx, cy, r, 0, Math.PI * 2); g.fill();
           g.strokeStyle = COLORS.right; g.lineWidth = 2; g.stroke();
           label(g, kit.name, cx, cy + 4 * s, s);
+          this.keyHint(k, cx, cy + 20 * s, s);
           this.targets.push({ key: k, inside: (x, y) => (x - cx) ** 2 + (y - cy) ** 2 <= r * r });
         }
         g.globalAlpha = 1;
@@ -393,23 +443,102 @@
     tap(ev) {
       const box = this.canvas.getBoundingClientRect();
       const x = ev.clientX - box.left, y = ev.clientY - box.top;
-      const hit = (this.targets || []).find((target) => target.inside(x, y));
-      if (!hit) return;
+      const target = (this.targets || []).find((tg) => tg.inside(x, y));
+      if (!target) return;
       ev.preventDefault();
+      this.hit(target.key);
+    }
+
+    // One hit from any input: sound, flash, and in Play mode a verdict against the nearest expected note.
+    hit(key, soundKey) {
       audio();
-      if (this.kind === "piano") pianoNote(ctx.currentTime, hit.key, 0.5);
-      else DRUM_SOUND[hit.key](ctx.currentTime);
-      this.flashes[hit.key] = performance.now();
+      activePlayer = this;
+      if (this.kind === "piano") pianoNote(ctx.currentTime, key, 0.5);
+      else DRUM_SOUND[soundKey || key](ctx.currentTime);
+      let color = COLORS.flash;
+      if (this.mode === "play" && this.playing) color = this.judge(key) ? COLORS.good : COLORS.bad;
+      this.flashes[key] = { at: performance.now(), color };
       if (!this.playing) {
         this.draw(IDLE);
-        setTimeout(() => !this.playing && this.draw(IDLE), 200);
+        setTimeout(() => !this.playing && this.draw(IDLE), 250);
       }
     }
+
+    tolerance() {
+      // At most 0.1 s, and never so wide that two neighbouring notes overlap.
+      return Math.min((0.1 * this.bpm) / 60, this.song.minGap * 0.45);
+    }
+
+    judge(key) {
+      const cur = this.beatAt(ctx.currentTime);
+      const tol = this.tolerance();
+      const same = (e) => (this.kind === "piano" ? e.midi === key : (KIT[e.key].pad || e.key) === key);
+      const near = this.occurrences(cur - tol, cur + tol + 0.001)
+        .filter((e) => same(e) && !this.judged.has(e.id) && Math.abs(e.beat - cur) <= tol)
+        .sort((a, b) => Math.abs(a.beat - cur) - Math.abs(b.beat - cur))[0];
+      if (near) {
+        this.judged.set(near.id, "hit");
+        this.score.hit++;
+      } else {
+        this.score.early++;
+        this.marks.push({ key, at: performance.now() });
+      }
+      this.showScore();
+      return Boolean(near);
+    }
+
+    findMisses(cur) {
+      const tol = this.tolerance();
+      this.occurrences(cur - 2, cur - tol).forEach((e) => {
+        if (e.beat < 0 || e.beat >= cur - tol || this.judged.has(e.id)) return;
+        this.judged.set(e.id, "miss");
+        this.score.miss++;
+        const key = this.kind === "piano" ? e.midi : KIT[e.key].pad || e.key;
+        this.flashes[key] = { at: performance.now(), color: COLORS.bad };
+        this.showScore();
+      });
+    }
+
+    resetScore() {
+      this.judged.clear();
+      this.marks = [];
+      this.score = { hit: 0, early: 0, miss: 0 };
+      this.showScore();
+    }
+    showScore() {
+      const { hit, early, miss } = this.score;
+      this.scoreLabel.textContent = this.mode === "play" ? `вовремя ${hit} · не вовремя ${early} · пропущено ${miss}` : "";
+    }
+
+    noteColor(e, normal) {
+      const verdict = this.mode === "play" && this.judged.get(e.id);
+      return verdict === "hit" ? COLORS.good : verdict === "miss" ? COLORS.bad : normal;
+    }
+
+    // Off-time hits flash on the hit line of their lane and fade out.
+    liveMarks() {
+      const now = performance.now();
+      this.marks = this.marks.filter((m) => now - m.at < 600);
+      return this.marks.map((m) => ({ key: m.key, fade: 1 - (now - m.at) / 600, offset: 0 }));
+    }
+
     manualFlashes() {
       const now = performance.now();
-      return Object.keys(this.flashes)
-        .filter((k) => now - this.flashes[k] < 180)
-        .map((k) => (this.kind === "piano" ? Number(k) : k));
+      const out = new Map();
+      Object.entries(this.flashes).forEach(([k, f]) => {
+        if (now - f.at < 200) out.set(this.kind === "piano" ? Number(k) : k, f.color);
+      });
+      return out;
+    }
+
+    keyHint(padKey, x, y, s) {
+      if (this.mode !== "play") return;
+      const code = Object.keys(DRUM_KEYS).find((c) => DRUM_KEYS[c] === padKey);
+      if (!code) return;
+      this.g.fillStyle = COLORS.muted;
+      this.g.font = `${Math.max(9, 11 * s)}px Segoe UI, Arial, sans-serif`;
+      this.g.textAlign = "center";
+      this.g.fillText(code === "Space" ? "Space" : KEY_LABELS[code], x, y);
     }
 
     drawPiano(cur) {
@@ -435,11 +564,11 @@
       }
       const sounding = new Set();
       this.occurrences(cur - 8, cur + BEATS_VISIBLE).forEach((e) => {
-        if (this.playing && e.beat <= cur && cur < e.beat + e.dur) sounding.add(e.midi);
+        if (this.playing && this.mode === "listen" && e.beat <= cur && cur < e.beat + e.dur) sounding.add(e.midi);
         const y0 = yOf(e.beat), y1 = yOf(e.beat + e.dur);
         if (y1 > top || !keyX[e.midi]) return;
         const k = keyX[e.midi];
-        g.fillStyle = isBlack(e.midi) ? "#1f4f8f" : COLORS.right;
+        g.fillStyle = this.noteColor(e, isBlack(e.midi) ? "#1f4f8f" : COLORS.right);
         roundRect(g, k.x + 3, y1 + 1, k.w - 6, Math.min(y0, top) - y1 - 2, 5);
         g.fill();
         g.fillStyle = "#fff"; g.textAlign = "center";
@@ -447,7 +576,8 @@
         if (Math.min(y0, top) - y1 > 16) g.fillText(e.label, k.x + k.w / 2, Math.min(y0, top) - 8);
       });
 
-      this.manualFlashes().forEach((m) => sounding.add(m));
+      const manual = this.manualFlashes();
+      const keyFill = (m, idle) => manual.get(m) || (sounding.has(m) ? COLORS.flash : idle);
       this.targets = [];
       for (let m = lo; m <= hi; m++) {
         const k = keyX[m];
@@ -457,19 +587,39 @@
       }
       whites.forEach((m) => {
         const k = keyX[m];
-        g.fillStyle = sounding.has(m) ? COLORS.flash : "#fff";
+        g.fillStyle = keyFill(m, "#fff");
         g.fillRect(k.x, top, k.w, keysH);
         g.strokeStyle = "#888"; g.lineWidth = 1; g.strokeRect(k.x + 0.5, top + 0.5, k.w - 1, keysH - 1);
         g.fillStyle = COLORS.muted; g.textAlign = "center";
         g.font = `${Math.min(12, kw * 0.32)}px Segoe UI, Arial, sans-serif`;
         g.fillText(NAMES[m % 12], k.x + k.w / 2, this.h - 10);
       });
+      this.pianoKeyCodes = {};
+      const base = lo + ((12 - (lo % 12)) % 12);
+      PIANO_KEYS.forEach((code, i) => { if (base + i <= hi) this.pianoKeyCodes[code] = base + i; });
       for (let m = lo; m <= hi; m++) {
         if (!isBlack(m)) continue;
         const k = keyX[m];
-        g.fillStyle = sounding.has(m) ? COLORS.flash : "#222";
+        g.fillStyle = keyFill(m, "#222");
         g.fillRect(k.x, top, k.w, keysH * 0.6);
       }
+      if (this.mode === "play") {
+        Object.entries(this.pianoKeyCodes).forEach(([code, m]) => {
+          const k = keyX[m];
+          g.fillStyle = isBlack(m) ? "#fff" : COLORS.right;
+          g.font = "bold 11px Segoe UI, Arial, sans-serif"; g.textAlign = "center";
+          g.fillText(KEY_LABELS[code], k.x + k.w / 2, top + (isBlack(m) ? keysH * 0.5 : keysH * 0.75));
+        });
+      }
+      this.liveMarks().forEach((m) => {
+        const k = keyX[m.key];
+        if (!k) return;
+        g.globalAlpha = m.fade;
+        g.fillStyle = COLORS.bad;
+        roundRect(g, k.x + 3, top - 10 + m.offset * perBeat, k.w - 6, 10, 3);
+        g.fill();
+        g.globalAlpha = 1;
+      });
       g.strokeStyle = COLORS.text; g.lineWidth = 2;
       g.beginPath(); g.moveTo(0, top); g.lineTo(w, top); g.stroke();
     }
@@ -511,6 +661,34 @@
     g.font = `bold ${Math.max(9, 12 * s)}px Segoe UI, Arial, sans-serif`;
     g.textAlign = "center";
     g.fillText(text, x, y);
+  }
+
+  // Keys and MIDI go to the player last started or touched.
+  let activePlayer = null;
+  document.addEventListener("keydown", (ev) => {
+    const p = activePlayer;
+    if (!p || ev.repeat || ev.ctrlKey || ev.metaKey || ev.altKey) return;
+    if (/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement && document.activeElement.tagName)) return;
+    const key = p.kind === "piano" ? p.pianoKeyCodes && p.pianoKeyCodes[ev.code] : DRUM_KEYS[ev.code];
+    if (key === undefined) return;
+    ev.preventDefault();
+    p.hit(key);
+  });
+
+  let midiRequested = false;
+  function requestMidi() {
+    if (midiRequested || !navigator.requestMIDIAccess) return;
+    midiRequested = true;
+    navigator.requestMIDIAccess().then((access) => {
+      const listen = (input) => (input.onmidimessage = (msg) => {
+        const [status, note, velocity] = msg.data;
+        if ((status & 0xf0) !== 0x90 || velocity === 0 || !activePlayer) return;
+        if (activePlayer.kind === "piano") activePlayer.hit(note);
+        else if (GM_DRUMS[note]) activePlayer.hit(KIT[GM_DRUMS[note]].pad || GM_DRUMS[note], GM_DRUMS[note]);
+      });
+      access.inputs.forEach(listen);
+      access.onstatechange = (ev) => ev.port.type === "input" && listen(ev.port);
+    }).catch(() => {});
   }
 
   function init() {

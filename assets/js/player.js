@@ -894,6 +894,318 @@
     }
   }
 
+
+  // ---------- intervals (1.5) ----------
+  // Exact ratios, as on a monochord: the waves of the two notes meet again every `q` periods of the lower one.
+  const INTERVALS = [["Октава", 2, 1, "до–до"], ["Квинта", 3, 2, "до–соль"], ["Кварта", 4, 3, "до–фа"],
+                     ["Б. терция", 5, 4, "до–ми"], ["М. терция", 6, 5, "до–ми♭"], ["Б. секунда", 9, 8, "до–ре"],
+                     ["М. секунда", 16, 15, "до–до♯"]];
+  const DO4 = 261.63;
+
+  class IntervalLab {
+    constructor(el) {
+      this.el = el;
+      this.pick = 1;
+      this.canvas = document.createElement("canvas");
+      this.g = this.canvas.getContext("2d");
+      const bar = document.createElement("div");
+      bar.className = "player-controls";
+      bar.innerHTML = '<button type="button" class="player-play">▶ Сыграть</button><span class="player-score lab-info"></span>';
+      el.append(this.canvas, bar);
+      this.info = bar.querySelector(".lab-info");
+      bar.querySelector("button").addEventListener("click", () => this.play());
+      this.canvas.addEventListener("pointerdown", (ev) => {
+        const box = this.canvas.getBoundingClientRect();
+        if (ev.clientY - box.top > this.boxBottom) return;
+        this.pick = Math.max(0, Math.min(6, Math.floor(((ev.clientX - box.left) / this.w) * 7)));
+        this.play();
+      });
+      this.resize();
+      window.addEventListener("resize", () => this.resize());
+    }
+
+    resize() {
+      const w = this.el.clientWidth, h = Math.round(Math.min(300, w * 0.5));
+      const dpr = window.devicePixelRatio || 1;
+      this.canvas.width = w * dpr; this.canvas.height = h * dpr; this.canvas.style.height = h + "px";
+      this.g.setTransform(dpr, 0, 0, dpr, 0, 0);
+      this.w = w; this.h = h;
+      this.draw();
+    }
+
+    play() {
+      audio();
+      const [, pn, q] = INTERVALS[this.pick];
+      const lo = DO4, hi = (DO4 * pn) / q, t = ctx.currentTime + 0.05;
+      const note = (f, at, dur) => pianoNote(at, 69 + 12 * Math.log2(f / 440), dur);
+      note(lo, t, 0.45); note(hi, t + 0.5, 0.45);
+      note(lo, t + 1.1, 1.6); note(hi, t + 1.1, 1.6);
+      this.draw();
+    }
+
+    draw() {
+      const g = this.g, w = this.w, h = this.h;
+      g.fillStyle = COLORS.bg; g.fillRect(0, 0, w, h);
+      const n = INTERVALS.length, gap = 6, bw = (w - 16 - gap * (n - 1)) / n, bh = Math.min(72, h * 0.28), top = 8;
+      this.boxBottom = top + bh;
+      INTERVALS.forEach(([name, pn, q, ex], i) => {
+        const x = 8 + i * (bw + gap), good = i < 5, on = i === this.pick;
+        g.fillStyle = good ? "#e6f4e6" : "#f9e6e6";
+        roundRect(g, x, top, bw, bh, 8); g.fill();
+        g.strokeStyle = good ? "#2a9d4b" : COLORS.bad; g.lineWidth = on ? 3 : 1.5; g.stroke();
+        g.textAlign = "center"; g.fillStyle = COLORS.text;
+        g.font = `bold ${Math.min(13, bw * 0.13)}px Segoe UI, Arial, sans-serif`;
+        g.fillText(name, x + bw / 2, top + bh * 0.32);
+        g.font = `${Math.min(13, bw * 0.13)}px Segoe UI, Arial, sans-serif`;
+        g.fillText(`${pn} : ${q}`, x + bw / 2, top + bh * 0.6);
+        g.fillStyle = COLORS.muted; g.fillText(ex, x + bw / 2, top + bh * 0.86);
+      });
+      // three waves over `q` periods of the lower note (at least two), so the meeting point is always on screen
+      const [name, pn, q] = INTERVALS[this.pick];
+      const periods = Math.max(2, q);
+      const rows = [["нижняя нота", [1]], ["верхняя нота", [pn / q]], ["вместе", [1, pn / q]]];
+      const rowH = (h - top - bh - 14) / 3;
+      rows.forEach(([label, ratios], r) => {
+        const mid = top + bh + 10 + rowH * (r + 0.5), amp = rowH * (r === 2 ? 0.42 : 0.3);
+        g.fillStyle = COLORS.muted; g.font = "11px Segoe UI, Arial, sans-serif"; g.textAlign = "left";
+        g.fillText(label, 8, mid - rowH * 0.38);
+        g.strokeStyle = r === 2 ? (this.pick < 5 ? "#2a9d4b" : COLORS.bad) : COLORS.right;
+        g.lineWidth = periods > 8 ? 1 : 1.6;
+        g.beginPath();
+        for (let x = 0; x <= w - 16; x += 0.5) {
+          const ph = (2 * Math.PI * periods * x) / (w - 16);
+          const y = ratios.reduce((s, k) => s + Math.sin(ph * k), 0) / ratios.length;
+          if (x === 0) g.moveTo(8 + x, mid - amp * y); else g.lineTo(8 + x, mid - amp * y);
+        }
+        g.stroke();
+      });
+      this.info.textContent = this.pick < 5
+        ? `${name}: волны сходятся каждые ${q} ${plural(q, "колебание", "колебания", "колебаний")} нижней ноты — звуки сливаются`
+        : `${name}: волны сходятся лишь раз в ${q} колебаний нижней ноты — между встречами они то складываются, то гасят друг друга, слышно дрожание`;
+    }
+  }
+
+  // ---------- hearing: loudness in decibels and the upper limit (1.3.1) ----------
+  // Never louder than REF: a fixed, quiet level; the buttons only attenuate it.
+  const REF = 0.12;
+  const LEVELS = [0, -3, -10, -20, -30];
+  const HEARING = [50, 100, 1000, 4000, 8000, 12000, 15000, 17000];
+
+  class EarLab {
+    constructor(el) {
+      this.el = el;
+      this.db = 0;
+      this.canvas = document.createElement("canvas");
+      this.g = this.canvas.getContext("2d");
+      const loud = document.createElement("div");
+      loud.className = "player-controls";
+      loud.innerHTML = "<b>Громкость:</b>" + LEVELS.map((d) => `<button type="button" data-db="${d}">${d === 0 ? "0" : "−" + -d} дБ</button>`).join("") +
+        '<button type="button" data-two="1">1 инструмент → 2</button>';
+      const high = document.createElement("div");
+      high.className = "player-controls";
+      high.innerHTML = "<b>Предел слуха:</b>" + HEARING.map((f) => `<button type="button" data-hz="${f}">${f >= 1000 ? f / 1000 + " кГц" : f + " Гц"}</button>`).join("") +
+        '<span class="player-score lab-info"></span>';
+      el.append(this.canvas, loud, high);
+      this.info = high.querySelector(".lab-info");
+      loud.querySelectorAll("[data-db]").forEach((b) => b.addEventListener("click", () => this.level(Number(b.dataset.db))));
+      loud.querySelector("[data-two]").addEventListener("click", () => this.two());
+      high.querySelectorAll("[data-hz]").forEach((b) => b.addEventListener("click", () => this.hear(Number(b.dataset.hz))));
+      this.resize();
+      window.addEventListener("resize", () => this.resize());
+    }
+
+    resize() {
+      const w = this.el.clientWidth, h = 120;
+      const dpr = window.devicePixelRatio || 1;
+      this.canvas.width = w * dpr; this.canvas.height = h * dpr; this.canvas.style.height = h + "px";
+      this.g.setTransform(dpr, 0, 0, dpr, 0, 0);
+      this.w = w; this.h = h;
+      this.draw();
+    }
+
+    sine(f, at, dur, gain) {
+      const o = ctx.createOscillator(), g = ctx.createGain();
+      o.frequency.value = f;
+      g.gain.setValueAtTime(0, at);
+      g.gain.linearRampToValueAtTime(gain, at + 0.05);
+      g.gain.setValueAtTime(gain, at + dur - 0.1);
+      g.gain.linearRampToValueAtTime(0, at + dur);
+      o.connect(g); g.connect(ctx.destination);
+      o.start(at); o.stop(at + dur + 0.05);
+    }
+
+    level(db) {
+      audio();
+      this.db = db;
+      this.sine(440, ctx.currentTime + 0.02, 1, REF * Math.pow(10, db / 20));
+      this.info.textContent = db === 0 ? "исходный уровень" :
+        `${db} дБ: мощность в ${Math.round(Math.pow(10, -db / 10))} раз меньше, а на слух — примерно в ${(Math.pow(2, -db / 10)).toFixed(1).replace(".", ",").replace(",0", "")} раза тише`;
+      this.draw();
+    }
+
+    two() {
+      audio();
+      const t = ctx.currentTime + 0.02, one = REF * Math.pow(10, -6 / 20);
+      this.sine(440, t, 1, one);
+      // two players never sound in phase: slightly different pitch, so their powers add up (+3 dB), not amplitudes
+      this.sine(440, t + 1.3, 1, one);
+      this.sine(440.7, t + 1.3, 1, one);
+      this.db = -3;
+      this.info.textContent = "второй такой же инструмент добавляет всего +3 дБ: разница едва заметна";
+      this.draw();
+    }
+
+    hear(f) {
+      audio();
+      this.sine(f, ctx.currentTime + 0.02, 1.5, REF * 0.5);
+      this.info.textContent = `${f} Гц — ${f <= 100 ? "в маленьких динамиках может быть не слышно, лучше в наушниках" :
+        f >= 12000 ? "слышите? С возрастом верхняя граница снижается, это нормально" : "это слышат все"}`;
+    }
+
+    draw() {
+      const g = this.g, w = this.w, h = this.h;
+      g.fillStyle = COLORS.bg; g.fillRect(0, 0, w, h);
+      const power = Math.pow(10, this.db / 10), felt = Math.pow(2, this.db / 10);
+      const bars = [["мощность", power, "#9aa1ad"], ["на слух", felt, COLORS.right]];
+      const left = 90, full = w - left - 70;
+      bars.forEach(([name, v, color], i) => {
+        const y = 22 + i * 44;
+        g.fillStyle = COLORS.text; g.font = "bold 12px Segoe UI, Arial, sans-serif"; g.textAlign = "right";
+        g.fillText(name, left - 10, y + 14);
+        g.fillStyle = "#e9e9e2"; roundRect(g, left, y, full, 20, 4); g.fill();
+        g.fillStyle = color; roundRect(g, left, y, Math.max(3, full * v), 20, 4); g.fill();
+        g.fillStyle = COLORS.muted; g.font = "12px Segoe UI, Arial, sans-serif"; g.textAlign = "left";
+        g.fillText(v === 1 ? "100 %" : `${Math.round(v * 1000) / 10} %`.replace(".", ","), left + full + 8, y + 14);
+      });
+      g.fillStyle = COLORS.muted; g.font = "11px Segoe UI, Arial, sans-serif"; g.textAlign = "left";
+      g.fillText(`уровень ${this.db} дБ от исходного`, left, h - 6);
+    }
+  }
+
+
+  // ---------- chord builder (1.5, lesson 1 step 5) ----------
+  const CHORD_PRESETS = [["Мажор", [60, 64, 67]], ["Минор", [60, 63, 67]], ["Минор на белых", [62, 65, 69]],
+                         ["Кластер", [60, 61, 62]], ["Октава", [60, 72]], ["Квинта", [60, 67]],
+                         ["Б. терция", [60, 64]], ["М. секунда", [60, 61]]];
+  const STEP_NAMES = ["унисон", "малая секунда", "большая секунда", "малая терция", "большая терция", "кварта", "тритон",
+                      "квинта", "малая секста", "большая секста", "малая септима", "большая септима", "октава"];
+  function chordName(steps) {
+    const key = steps.join("+");
+    if (key === "4+3") return "мажорное трезвучие: светло и устойчиво";
+    if (key === "3+4") return "минорное трезвучие: мягко и грустно";
+    if (key === "1+1") return "кластер: резко, звуки «трутся»";
+    if (steps.length === 1 && steps[0] <= 12) return STEP_NAMES[steps[0]];
+    return "";
+  }
+
+  class ChordLab {
+    constructor(el) {
+      this.el = el;
+      this.lo = 60; this.hi = 83; // до4 … си5
+      this.chosen = new Set([60, 64, 67]);
+      this.lit = new Map();
+      this.canvas = document.createElement("canvas");
+      this.g = this.canvas.getContext("2d");
+      const bar = document.createElement("div");
+      bar.className = "player-controls";
+      bar.innerHTML = '<button type="button" class="player-play" data-act="together">▶ Вместе</button>' +
+        '<button type="button" data-act="apart">▶ По очереди</button><button type="button" data-act="clear">Сбросить</button>' +
+        '<span class="player-score lab-info"></span>';
+      const presets = document.createElement("div");
+      presets.className = "player-controls";
+      presets.innerHTML = "<b>Готовые:</b>" + CHORD_PRESETS.map(([n], i) => `<button type="button" data-preset="${i}">${n}</button>`).join("");
+      el.append(this.canvas, bar, presets);
+      this.info = bar.querySelector(".lab-info");
+      bar.querySelector("[data-act=together]").addEventListener("click", () => this.play(false));
+      bar.querySelector("[data-act=apart]").addEventListener("click", () => this.play(true));
+      bar.querySelector("[data-act=clear]").addEventListener("click", () => { this.chosen.clear(); this.draw(); });
+      presets.querySelectorAll("[data-preset]").forEach((b) => b.addEventListener("click", () => {
+        this.chosen = new Set(CHORD_PRESETS[Number(b.dataset.preset)][1]);
+        this.play(false);
+      }));
+      this.canvas.addEventListener("pointerdown", (ev) => {
+        const box = this.canvas.getBoundingClientRect();
+        const m = this.keyAt(ev.clientX - box.left, ev.clientY - box.top);
+        if (m === undefined) return;
+        if (this.chosen.has(m)) this.chosen.delete(m);
+        else { this.chosen.add(m); audio(); pianoNote(ctx.currentTime, m, 0.5); }
+        this.draw();
+      });
+      this.resize();
+      window.addEventListener("resize", () => this.resize());
+    }
+
+    resize() {
+      const w = this.el.clientWidth, h = Math.round(Math.min(190, w * 0.32));
+      const dpr = window.devicePixelRatio || 1;
+      this.canvas.width = w * dpr; this.canvas.height = h * dpr; this.canvas.style.height = h + "px";
+      this.g.setTransform(dpr, 0, 0, dpr, 0, 0);
+      this.w = w; this.h = h;
+      this.layout();
+      this.draw();
+    }
+
+    layout() {
+      const whites = [];
+      for (let m = this.lo; m <= this.hi; m++) if (!isBlack(m)) whites.push(m);
+      const kw = (this.w - 16) / whites.length;
+      this.kw = kw;
+      this.keys = {};
+      whites.forEach((m, i) => (this.keys[m] = { x: 8 + i * kw, w: kw, black: false }));
+      for (let m = this.lo; m <= this.hi; m++) if (isBlack(m)) this.keys[m] = { x: this.keys[m - 1].x + kw * 0.69, w: kw * 0.62, black: true };
+      this.top = 8; this.keysH = this.h - 16;
+    }
+
+    keyAt(x, y) {
+      const inKey = (m) => { const k = this.keys[m]; return x >= k.x && x <= k.x + k.w && y >= this.top && y <= this.top + this.keysH * (k.black ? 0.62 : 1); };
+      for (let m = this.lo; m <= this.hi; m++) if (isBlack(m) && inKey(m)) return m;
+      for (let m = this.lo; m <= this.hi; m++) if (!isBlack(m) && inKey(m)) return m;
+      return undefined;
+    }
+
+    play(apart) {
+      if (!this.chosen.size) return;
+      audio();
+      const notes = [...this.chosen].sort((a, b) => a - b);
+      const t = ctx.currentTime + 0.03;
+      notes.forEach((m, i) => {
+        const at = apart ? t + i * 0.45 : t;
+        pianoNote(at, m, apart ? 0.4 : 2.5);
+        setTimeout(() => { this.lit.set(m, performance.now()); this.draw(); setTimeout(() => this.draw(), 450); }, (at - ctx.currentTime) * 1000);
+      });
+      this.draw();
+    }
+
+    draw() {
+      const g = this.g, { top, keysH, kw } = this;
+      g.fillStyle = COLORS.bg; g.fillRect(0, 0, this.w, this.h);
+      const now = performance.now();
+      const fill = (m, idle) => (this.lit.has(m) && now - this.lit.get(m) < 400 ? COLORS.flash : this.chosen.has(m) ? (isBlack(m) ? COLORS.right : "#b7d0f0") : idle);
+      g.textAlign = "center";
+      for (let m = this.lo; m <= this.hi; m++) {
+        if (isBlack(m)) continue;
+        const k = this.keys[m];
+        g.fillStyle = fill(m, "#fff");
+        roundRect(g, k.x + 1, top, k.w - 2, keysH, 6); g.fill();
+        g.strokeStyle = "#cfcfc6"; g.lineWidth = 1.5; g.stroke();
+        g.fillStyle = "#222"; g.font = `${m % 12 === 0 ? "bold " : ""}${Math.min(14, kw * 0.33)}px Segoe UI, Arial, sans-serif`;
+        g.fillText(NAMES[m % 12], k.x + k.w / 2, top + keysH - 10);
+      }
+      for (let m = this.lo; m <= this.hi; m++) {
+        if (!isBlack(m)) continue;
+        const k = this.keys[m];
+        g.fillStyle = fill(m, "#c5c5bc");
+        roundRect(g, k.x, top - 1, k.w, keysH * 0.62 + 1, 4); g.fill();
+      }
+      const notes = [...this.chosen].sort((a, b) => a - b);
+      const names = notes.map((m) => NAMES[m % 12]).join(" + ");
+      const steps = notes.slice(1).map((m, i) => m - notes[i]);
+      const name = chordName(steps);
+      this.info.textContent = !notes.length ? "щёлкайте по клавишам, чтобы выбрать ноты" :
+        notes.length === 1 ? names : `${names}: шаги ${steps.join(" + ")} ${plural(steps[steps.length - 1], "полутон", "полутона", "полутонов")}${name ? " — " + name : ""}`;
+    }
+  }
+
   // Keys and MIDI go to the player last started or touched.
   let activePlayer = null;
   document.addEventListener("keydown", (ev) => {
@@ -925,6 +1237,9 @@
   function init() {
     document.querySelectorAll(".lab[data-lab=ruler]").forEach((el) => el._lab || (el._lab = new RulerLab(el)));
     document.querySelectorAll(".lab[data-lab=octaves]").forEach((el) => el._lab || (el._lab = new OctaveLab(el)));
+    document.querySelectorAll(".lab[data-lab=intervals]").forEach((el) => el._lab || (el._lab = new IntervalLab(el)));
+    document.querySelectorAll(".lab[data-lab=ear]").forEach((el) => el._lab || (el._lab = new EarLab(el)));
+    document.querySelectorAll(".lab[data-lab=chords]").forEach((el) => el._lab || (el._lab = new ChordLab(el)));
     document.querySelectorAll(".player").forEach((el) => {
       if (el._player) return;
       try {

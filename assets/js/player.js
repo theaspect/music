@@ -1553,19 +1553,19 @@
   // The open string is tuned to до of the small octave; the scale comes from simple length ratios (just intonation).
   const STRING_BASE = 130.81;
   const STRING_MARKS = [
-    [1, "до", "вся струна — исходный звук"],
-    [15 / 16, "до♯", "15/16 струны — малая секунда выше"],
-    [8 / 9, "ре", "8/9 струны — большая секунда выше"],
-    [5 / 6, "ре♯", "5/6 струны — малая терция выше"],
-    [4 / 5, "ми", "4/5 струны — большая терция выше"],
-    [3 / 4, "фа", "3/4 струны — кварта выше"],
-    [32 / 45, "фа♯", "32/45 струны — тритон выше"],
-    [2 / 3, "соль", "2/3 струны — квинта выше"],
-    [5 / 8, "соль♯", "5/8 струны — малая секста выше"],
-    [3 / 5, "ля", "3/5 струны — большая секста выше"],
-    [5 / 9, "ля♯", "5/9 струны — малая септима выше"],
-    [8 / 15, "си", "8/15 струны — большая септима выше"],
-    [1 / 2, "до", "половина струны — октава выше"]];
+    [1, "до", "вся струна — исходный звук", "вся"],
+    [15 / 16, "до♯", "15/16 струны — малая секунда выше", "15/16"],
+    [8 / 9, "ре", "8/9 струны — большая секунда выше", "8/9"],
+    [5 / 6, "ре♯", "5/6 струны — малая терция выше", "5/6"],
+    [4 / 5, "ми", "4/5 струны — большая терция выше", "4/5"],
+    [3 / 4, "фа", "3/4 струны — кварта выше", "3/4"],
+    [32 / 45, "фа♯", "32/45 струны — тритон выше", "32/45"],
+    [2 / 3, "соль", "2/3 струны — квинта выше", "2/3"],
+    [5 / 8, "соль♯", "5/8 струны — малая секста выше", "5/8"],
+    [3 / 5, "ля", "3/5 струны — большая секста выше", "3/5"],
+    [5 / 9, "ля♯", "5/9 струны — малая септима выше", "5/9"],
+    [8 / 15, "си", "8/15 струны — большая септима выше", "8/15"],
+    [1 / 2, "до", "половина струны — октава выше", "1/2"]];
   class StringLab {
     constructor(el) {
       this.el = el;
@@ -1623,11 +1623,11 @@
     }
     freq() { return (STRING_BASE * Math.sqrt(this.tension)) / this.part; }
     resize() {
-      const w = this.el.clientWidth, h = 170;
+      const w = this.el.clientWidth, h = 196;
       const dpr = window.devicePixelRatio || 1;
       this.canvas.width = w * dpr; this.canvas.height = h * dpr; this.canvas.style.height = h + "px";
       this.g.setTransform(dpr, 0, 0, dpr, 0, 0);
-      this.w = w; this.h = h; this.x0 = 30; this.len = w - 60; this.y0 = 80;
+      this.w = w; this.h = h; this.x0 = 30; this.len = w - 60; this.y0 = 92;
       this.update();
     }
     update() {
@@ -1656,7 +1656,7 @@
       g.fillStyle = COLORS.bg; g.fillRect(0, 0, this.w, this.h);
       const fx = x0 + len * (1 - this.part);
       // marks for the simple ratios
-      STRING_MARKS.forEach(([share, name]) => {
+      STRING_MARKS.forEach(([share, name, , frac]) => {
         const x = x0 + len * (1 - share);
         const sharp = name.includes("♯"); // sharps above the string, like black keys; the rest below
         const labelY = sharp ? y0 - 40 : y0 + 44;
@@ -1664,6 +1664,9 @@
         g.beginPath(); g.moveTo(x, y0 - 34); g.lineTo(x, y0 + 30); g.stroke(); g.setLineDash([]);
         g.fillStyle = sharp ? COLORS.muted : COLORS.text; g.font = `${sharp ? "" : "bold "}${sharp ? 10 : 12}px Segoe UI, Arial, sans-serif`; g.textAlign = "center";
         g.fillText(name, x + (share === 1 ? 10 : 0), labelY);
+        // the share of the string that sounds, under the name (above it for sharps)
+        g.fillStyle = COLORS.muted; g.font = "10px Segoe UI, Arial, sans-serif";
+        g.fillText(frac, x + (share === 1 ? 10 : 0), sharp ? labelY - 12 : labelY + 13);
       });
       // pegs, the silent part and the vibrating part
       g.fillStyle = "#555"; g.fillRect(x0 - 8, y0 - 12, 8, 24); g.fillRect(x0 + len, y0 - 12, 8, 24);

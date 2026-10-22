@@ -1,0 +1,11 @@
+---
+---
+
+@import "{{ site.theme }}";
+
+// Photos differ in shape: a fixed frame keeps every row of the instruments table the same size
+table img {
+  width: 100px;
+  height: 100px;
+  object-fit: contain;
+}

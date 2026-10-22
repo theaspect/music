@@ -1899,7 +1899,9 @@
     constructor(el) {
       this.el = el;
       howto(el, "Как играть: щёлкните по кастрюле или нажмите «Стукнуть»; «Спеть» звучит, пока держите. Волна показана замедленно: на самом деле звук летит тысячные доли секунды.");
-      this.volume = 0.6;
+      this.db = -6; // relative to the loudest level of the experiment
+      this.volume = Math.pow(10, this.db / 20);
+      this.meter = 0; // amplitude shown by the level meter, falls back after a hit
       this.events = []; // {at, strength}: when a sound left the pot
       this.grains = Array.from({ length: 14 }, (_, i) => ({ x: (i + 0.5) / 14, h: 0, v: 0 }));
       this.canvas = document.createElement("canvas");
@@ -1908,12 +1910,16 @@
       bar.className = "player-controls";
       bar.innerHTML = '<button type="button" class="player-play" data-a="hit">Стукнуть по кастрюле</button>' +
         '<button type="button" data-a="sing">Спеть «а-а-а»</button>' +
-        '<label>Громкость <input type="range" min="10" max="100" value="60"></label>';
+        '<label>Громкость <input type="range" min="-40" max="0" step="1" value="-6"> <span class="lab-db">−6</span> дБ</label>';
       el.append(this.canvas, bar);
       bar.querySelector("[data-a=hit]").addEventListener("click", () => this.hit());
       holdButton(bar.querySelector("[data-a=sing]"), () => this.sing());
       const vol = bar.querySelector("input");
-      vol.addEventListener("input", () => (this.volume = vol.value / 100));
+      vol.addEventListener("input", () => {
+        this.db = Number(vol.value);
+        this.volume = Math.pow(10, this.db / 20);
+        bar.querySelector(".lab-db").textContent = String(this.db).replace("-", "−");
+      });
       this.canvas.addEventListener("pointerdown", (ev) => {
         const box = this.canvas.getBoundingClientRect();
         if (ev.clientX - box.left < this.w * 0.3) this.hit();
@@ -1935,10 +1941,14 @@
       hiss(t, 0.4, 0.25 * v, "bandpass", 3000);
       [523, 1187, 1879, 2790].forEach((f, i) => tone(t, f, 0, 1.2 - i * 0.2, (0.12 * v) / (i + 1)));
       this.events.push({ at: performance.now(), strength: v });
+      this.meter = Math.max(this.meter, v);
     }
     sing() {
       const stop = holdSing(this.volume);
-      const wave = () => this.events.push({ at: performance.now(), strength: this.volume * 0.6 });
+      const wave = () => {
+        this.events.push({ at: performance.now(), strength: this.volume * 0.6 });
+        this.meter = Math.max(this.meter, this.volume * 0.6);
+      };
       wave();
       const timer = setInterval(wave, 250);
       return () => { clearInterval(timer); stop(); };
@@ -1955,6 +1965,7 @@
       });
       this.events = this.events.filter((e) => now - e.at < travel + 200);
       this.grains.forEach((gr) => { gr.h = Math.max(0, gr.h + gr.v * 0.06); gr.v = gr.h > 0 || gr.v > 0 ? gr.v - 9.8 * 0.35 : 0; if (gr.h === 0 && gr.v < 0) gr.v = 0; });
+      this.meter *= 0.97;
       this.draw(now, travel);
       requestAnimationFrame(() => this.loop());
     }
@@ -1967,6 +1978,16 @@
       roundRect(g, px, py, pw, ph, 8); g.fill(); g.stroke();
       g.fillStyle = COLORS.text; g.font = "bold 12px Segoe UI, Arial, sans-serif"; g.textAlign = "center";
       g.fillText("кастрюля", px + pw / 2, py + ph / 2 + 4);
+      // level meter, −40 … 0 dB relative to the loudest level of the experiment
+      const mx = px, my = 14, mw = Math.min(w * 0.5, 260), mh = 12;
+      const level = this.meter > 0.0001 ? Math.max(-40, 20 * Math.log10(this.meter)) : -40;
+      g.fillStyle = "#e9e9e2"; roundRect(g, mx, my, mw, mh, 3); g.fill();
+      g.fillStyle = level > -6 ? COLORS.bad : COLORS.right;
+      roundRect(g, mx, my, Math.max(2, mw * (level + 40) / 40), mh, 3); g.fill();
+      g.fillStyle = COLORS.muted; g.font = "10px Segoe UI, Arial, sans-serif"; g.textAlign = "center";
+      [-40, -30, -20, -10, 0].forEach((d) => g.fillText(String(d).replace("-", "−"), mx + mw * (d + 40) / 40, my + mh + 11));
+      g.textAlign = "left"; g.fillStyle = COLORS.text; g.font = "bold 11px Segoe UI, Arial, sans-serif";
+      g.fillText(`уровень: ${level <= -40 ? "тишина" : Math.round(level).toString().replace("-", "−") + " дБ"}`, mx + mw + 10, my + 10);
       // waves in flight
       const bx0 = w * 0.62, bx1 = w * 0.94, film = h * 0.55;
       this.events.forEach((e) => {

@@ -1428,8 +1428,8 @@
       bar.querySelectorAll("[data-mark]").forEach((b) => b.addEventListener("click", () => { this.part = STRING_MARKS[b.dataset.mark][0]; this.pluck(); }));
       const ten = bar.querySelector("input");
       ten.addEventListener("input", () => { this.tension = ten.value / 100; bar.querySelector(".lab-ten").textContent = ten.value; this.update(); });
-      // Drag the finger along the string (it snaps to the simple ratios); a short click plucks the blue part
-      // or, on the grey part, lifts the finger.
+      // Drag the finger along the string (it snaps to the simple ratios; at the edge the whole string sounds);
+      // a short click anywhere on the string plucks it.
       let press = null;
       const posAt = (ev) => (ev.clientX - this.canvas.getBoundingClientRect().left - this.x0) / this.len;
       const setFinger = (pos) => {
@@ -1456,9 +1456,7 @@
       });
       const end = () => {
         if (!press) return;
-        if (!press.moved && !press.onFinger) {
-          if (press.pos < 1 - this.part) { this.part = 1; this.update(); } else this.pluck();
-        }
+        if (!press.moved && !press.onFinger) this.pluck();
         press = null;
       };
       ["pointerup", "pointercancel"].forEach((e) => this.canvas.addEventListener(e, end));
@@ -1527,7 +1525,7 @@
         g.beginPath(); g.arc(fx, y0 - 14, 9, 0, Math.PI * 2); g.fill(); g.stroke();
       }
       g.fillStyle = COLORS.muted; g.font = "11px Segoe UI, Arial, sans-serif"; g.textAlign = "left";
-      g.fillText("тяните палец вдоль струны; щелчок по синей части — щипок, по серой — убрать палец", 8, 16);
+      g.fillText("тяните палец вдоль струны, к краю — звучит вся струна; щелчок по струне — щипок", 8, 16);
     }
   }
 

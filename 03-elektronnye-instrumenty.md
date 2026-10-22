@@ -4,14 +4,14 @@
 
 ## 3.1. Основные виды электронных инструментов
 
-| Инструмент | Что делает |
-| --- | --- |
-| [**Синтезатор**](https://ru.wikipedia.org/wiki/Синтезатор) | создаёт звук с нуля из электрических колебаний; меняя настройки, из одного прибора можно получить бас, «скрипку», «космический» гул |
-| [**Драм-машина**](https://ru.wikipedia.org/wiki/Драм-машина) | играет барабанные партии; самая знаменитая — [Roland TR-808](https://en.wikipedia.org/wiki/Roland_TR-808) (статья на англ.) 1980 года, её звуки до сих пор слышны в хип-хопе и поп-музыке |
-| [**Сэмплер**](https://ru.wikipedia.org/wiki/Сэмплер) | проигрывает **сэмплы** — короткие записи реальных звуков: удара барабана, голоса, аккорда |
-| [**Секвенсор**](https://en.wikipedia.org/wiki/Music_sequencer) (статья на англ.) | запоминает, какие ноты и когда играть, и воспроизводит их по кругу; на нём строится **паттерн** |
-| **Грувбокс** (groovebox) | всё вместе в одном корпусе: синтезатор, драм-машина и секвенсор. Circuit Tracks — грувбокс |
-| [**MIDI**](https://ru.wikipedia.org/wiki/MIDI) | не инструмент, а «язык», на котором приборы передают друг другу команды: «нажата нота до, вот так сильно», «нота отпущена». Сам MIDI звука не содержит |
+| Инструмент | Что делает | Изображение |
+| --- | --- | --- |
+| [**Синтезатор**](https://ru.wikipedia.org/wiki/Синтезатор) | создаёт звук с нуля из электрических колебаний; меняя настройки, из одного прибора можно получить бас, «скрипку», «космический» гул | ![Синтезатор](https://commons.wikimedia.org/wiki/Special:FilePath/Minimoog_@_Moogseum,_NAMM_2010.jpg?width=120)<br>На фото — Minimoog · Vincent Liu · [CC BY 2.0](https://creativecommons.org/licenses/by/2.0/deed.ru) · [файл](https://commons.wikimedia.org/wiki/File:Minimoog_@_Moogseum,_NAMM_2010.jpg) |
+| [**Драм-машина**](https://ru.wikipedia.org/wiki/Драм-машина) | играет барабанные партии; самая знаменитая — [Roland TR-808](https://en.wikipedia.org/wiki/Roland_TR-808) (статья на англ.) 1980 года, её звуки до сих пор слышны в хип-хопе и поп-музыке | ![Драм-машина](https://commons.wikimedia.org/wiki/Special:FilePath/Roland_TR-808_Rhythm_Composer.jpg?width=120)<br>На фото — Roland TR-808 · fr4dd · [CC BY 2.0](https://creativecommons.org/licenses/by/2.0/deed.ru) · [файл](https://commons.wikimedia.org/wiki/File:Roland_TR-808_Rhythm_Composer.jpg) |
+| [**Сэмплер**](https://ru.wikipedia.org/wiki/Сэмплер) | проигрывает **сэмплы** — короткие записи реальных звуков: удара барабана, голоса, аккорда | ![Сэмплер](https://commons.wikimedia.org/wiki/Special:FilePath/E-mu_Emulator_II%2B_%28rectified,_colours_improved%29.jpg?width=120)<br>На фото — E-mu Emulator II+ · Mojosynths · общественное достояние · [файл](https://commons.wikimedia.org/wiki/File:E-mu_Emulator_II%2B_%28rectified,_colours_improved%29.jpg) |
+| [**Секвенсор**](https://en.wikipedia.org/wiki/Music_sequencer) (статья на англ.) | запоминает, какие ноты и когда играть, и воспроизводит их по кругу; на нём строится **паттерн** | ![Секвенсор](https://commons.wikimedia.org/wiki/Special:FilePath/Korg_SQ-1_step_sequencer_-_1_-_2015_NAMM_Show.jpg?width=120)<br>На фото — Korg SQ-1 · Pete Brown · [CC BY 2.0](https://creativecommons.org/licenses/by/2.0/deed.ru) · [файл](https://commons.wikimedia.org/wiki/File:Korg_SQ-1_step_sequencer_-_1_-_2015_NAMM_Show.jpg) |
+| **Грувбокс** (groovebox) | всё вместе в одном корпусе: синтезатор, драм-машина и секвенсор. Circuit Tracks — грувбокс | ![Грувбокс](https://commons.wikimedia.org/wiki/Special:FilePath/Roland_MC-505.jpg?width=120)<br>На фото — Roland MC-505 · Hens Zimmerman · [CC BY 2.0](https://creativecommons.org/licenses/by/2.0/deed.ru) · [файл](https://commons.wikimedia.org/wiki/File:Roland_MC-505.jpg) |
+| [**MIDI**](https://ru.wikipedia.org/wiki/MIDI) | не инструмент, а «язык», на котором приборы передают друг другу команды: «нажата нота до, вот так сильно», «нота отпущена». Сам MIDI звука не содержит | ![MIDI](https://commons.wikimedia.org/wiki/Special:FilePath/Midi_ports_and_cable.jpg?width=120)<br>На фото — MIDI-разъёмы и кабель · Pretzelpaws · [CC BY-SA 3.0](https://creativecommons.org/licenses/by-sa/3.0/deed.ru) · [файл](https://commons.wikimedia.org/wiki/File:Midi_ports_and_cable.jpg) |
 
 ## 3.2. Как синтезатор делает звук
 

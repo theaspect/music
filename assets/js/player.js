@@ -1784,6 +1784,9 @@
     return out;
   }
 
+  // Notes the organ is tuned to: blowing covers до–ля of the first octave; tapping only reaches соль₅–фа₆.
+  const BOTTLE_ORGAN = { blow: [60, 62, 64, 65, 67, 69], tap: [79, 81, 83, 84, 86, 88] };
+
   class BottleLab {
     constructor(el) {
       this.el = el;
@@ -1796,21 +1799,28 @@
       const bar = document.createElement("div");
       bar.className = "player-controls";
       bar.innerHTML = '<span class="player-mode"><button type="button" data-m="tap" class="on">Стучать ложкой</button><button type="button" data-m="blow">Дуть</button></span>' +
-        '<button type="button" data-organ="1">Настроить орган: до ре ми фа соль ля</button>' +
+        '<button type="button" data-organ="1"></button>' +
         '<button type="button" data-reset="1">Вернуть как было</button><span class="player-score lab-info"></span>';
       el.append(this.canvas, bar);
       this.info = bar.querySelector(".lab-info");
       bar.querySelectorAll("[data-m]").forEach((b) => b.addEventListener("click", () => {
         bar.querySelectorAll("[data-m]").forEach((x) => x.classList.toggle("on", x === b));
-        this.mode = b.dataset.m; this.draw();
+        this.mode = b.dataset.m; this.organLabel(); this.draw();
       }));
+      this.organButton = bar.querySelector("[data-organ]");
+      this.organLabel();
+      // The organ is tuned for the current mode; the mode itself is left alone.
       bar.querySelector("[data-organ]").addEventListener("click", () => {
-        // levels at which blowing gives до, ре, ми, фа, соль, ля of the first octave
-        this.levels = [60, 62, 64, 65, 67, 69].map((m) => 1 - (BLOW_EMPTY / (440 * Math.pow(2, (m - 69) / 12))) ** 2);
-        this.mode = "blow";
-        bar.querySelectorAll("[data-m]").forEach((x) => x.classList.toggle("on", x.dataset.m === "blow"));
-        this.info.textContent = "Вода подобрана так, чтобы при выдувании звучали до, ре, ми, фа, соль, ля. Уровни идут неровно: " +
-          "чем выше нота, тем меньше воды нужно доливать. Орган настроен для «Дуть» — при стуке эти же бутылки звучат в обратном порядке и уже не гаммой.";
+        const notes = BOTTLE_ORGAN[this.mode];
+        this.levels = notes.map((m) => {
+          const f = midiFreq(m);
+          return this.mode === "blow" ? 1 - (BLOW_EMPTY / f) ** 2 : ((TAP_EMPTY / f) ** 2 - 1) / 2.5;
+        });
+        this.info.textContent = this.mode === "blow"
+          ? "Вода подобрана так, чтобы при выдувании звучали до, ре, ми, фа, соль, ля. Уровни идут неровно: чем выше нота, " +
+            "тем меньше воды нужно доливать. Переключитесь на «Стучать» — эти же бутылки зазвучат в обратном порядке и уже не гаммой."
+          : "При стуке бутылки звучат высоко и в узком диапазоне, примерно 790–1400 Гц: гамма от до туда не помещается. " +
+            "Поэтому орган собран из соль, ля, си, до, ре, ми — от соль второй октавы до ми третьей. Чем выше нота, тем меньше воды.";
         this.draw();
       });
       bar.querySelector("[data-reset]").addEventListener("click", () => {
@@ -1853,6 +1863,10 @@
       this.resize();
       window.addEventListener("resize", () => this.resize());
     }
+    organLabel() {
+      this.organButton.textContent = this.mode === "blow" ? "Настроить орган: до ре ми фа соль ля" : "Настроить орган: соль ля си до ре ми";
+    }
+
     geom() {
       const n = this.levels.length, bw = Math.min(60, (this.w - 40) / n - 14);
       return { n, bw, gap: (this.w - n * bw) / (n + 1), top: 46, bh: this.h - 116 };

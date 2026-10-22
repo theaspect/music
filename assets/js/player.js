@@ -132,6 +132,7 @@
     return { midi: 12 * (Number(m[3]) + 1) + SYL[m[1]] + acc, label: m[1] + (m[2] ? (acc > 0 ? "♯" : "♭") : "") };
   }
   const isBlack = (midi) => [1, 3, 6, 8, 10].includes(midi % 12);
+  const LETTERS = ["C", "C♯", "D", "D♯", "E", "F", "F♯", "G", "G♯", "A", "A♯", "B"];
 
   function parseDrums(el) {
     const steps = Number(el.dataset.steps || 8);
@@ -543,8 +544,9 @@
 
     drawPiano(cur) {
       const g = this.g, w = this.w;
-      const keysH = Math.min(130, this.h * 0.32);
-      const top = this.h - keysH;
+      const keysH = Math.min(150, this.h * 0.36);
+      const lettersH = 22;
+      const top = this.h - keysH - lettersH;
       const { lo, hi } = this.song;
       const whites = [];
       for (let m = lo; m <= hi; m++) if (!isBlack(m)) whites.push(m);
@@ -552,7 +554,7 @@
       const keyX = {};
       whites.forEach((m, i) => (keyX[m] = { x: i * kw, w: kw }));
       for (let m = lo; m <= hi; m++) {
-        if (isBlack(m)) keyX[m] = { x: keyX[m - 1].x + kw * 0.68, w: kw * 0.64 };
+        if (isBlack(m)) keyX[m] = { x: keyX[m - 1].x + kw * 0.69, w: kw * 0.62 };
       }
       const perBeat = top / BEATS_VISIBLE;
       const yOf = (beat) => top - (beat - cur) * perBeat;
@@ -585,14 +587,22 @@
         const target = { key: m, inside: (x, y) => x >= k.x && x <= k.x + k.w && y >= top && y <= bottom };
         if (isBlack(m)) this.targets.unshift(target); else this.targets.push(target);
       }
+      // keys in the style of the keyboard diagram in 1.2: rounded, light outlines, grey "black" keys, до tinted
+      const font = (size, bold) => `${bold ? "bold " : ""}${size}px Segoe UI, Arial, sans-serif`;
+      g.textAlign = "center";
       whites.forEach((m) => {
         const k = keyX[m];
-        g.fillStyle = keyFill(m, "#fff");
-        g.fillRect(k.x, top, k.w, keysH);
-        g.strokeStyle = "#888"; g.lineWidth = 1; g.strokeRect(k.x + 0.5, top + 0.5, k.w - 1, keysH - 1);
-        g.fillStyle = COLORS.muted; g.textAlign = "center";
-        g.font = `${Math.min(12, kw * 0.32)}px Segoe UI, Arial, sans-serif`;
-        g.fillText(NAMES[m % 12], k.x + k.w / 2, this.h - 10);
+        const isDo = m % 12 === 0;
+        g.fillStyle = keyFill(m, isDo ? "#e3eaf7" : "#fff");
+        roundRect(g, k.x + 1, top, k.w - 2, keysH, 6);
+        g.fill();
+        g.strokeStyle = "#cfcfc6"; g.lineWidth = 1.5; g.stroke();
+        g.fillStyle = "#222";
+        g.font = font(Math.min(16, kw * 0.33), isDo);
+        g.fillText(NAMES[m % 12], k.x + k.w / 2, top + keysH - 14);
+        g.fillStyle = "#555";
+        g.font = font(Math.min(13, kw * 0.3));
+        g.fillText(LETTERS[m % 12], k.x + k.w / 2, top + keysH + 16);
       });
       this.pianoKeyCodes = {};
       const base = lo + ((12 - (lo % 12)) % 12);
@@ -600,15 +610,21 @@
       for (let m = lo; m <= hi; m++) {
         if (!isBlack(m)) continue;
         const k = keyX[m];
-        g.fillStyle = keyFill(m, "#222");
-        g.fillRect(k.x, top, k.w, keysH * 0.6);
+        g.fillStyle = keyFill(m, "#c5c5bc");
+        roundRect(g, k.x, top - 1, k.w, keysH * 0.62 + 1, 4);
+        g.fill();
+        if (k.w > 30) {
+          g.fillStyle = "#333";
+          g.font = font(Math.min(11, k.w * 0.24));
+          g.fillText(NAMES[m % 12], k.x + k.w / 2, top + keysH * 0.62 - 8);
+        }
       }
       if (this.mode === "play") {
         Object.entries(this.pianoKeyCodes).forEach(([code, m]) => {
           const k = keyX[m];
-          g.fillStyle = isBlack(m) ? "#fff" : COLORS.right;
-          g.font = "bold 11px Segoe UI, Arial, sans-serif"; g.textAlign = "center";
-          g.fillText(KEY_LABELS[code], k.x + k.w / 2, top + (isBlack(m) ? keysH * 0.5 : keysH * 0.75));
+          g.fillStyle = isBlack(m) ? "#1f4f8f" : COLORS.right;
+          g.font = font(12, true);
+          g.fillText(KEY_LABELS[code], k.x + k.w / 2, top + (isBlack(m) ? keysH * 0.3 : keysH * 0.62));
         });
       }
       this.liveMarks().forEach((m) => {
@@ -620,8 +636,8 @@
         g.fill();
         g.globalAlpha = 1;
       });
-      g.strokeStyle = COLORS.text; g.lineWidth = 2;
-      g.beginPath(); g.moveTo(0, top); g.lineTo(w, top); g.stroke();
+      g.strokeStyle = "#8a8a82"; g.lineWidth = 1.5;
+      g.beginPath(); g.moveTo(0, top - 1); g.lineTo(w, top - 1); g.stroke();
     }
 
     legend(...items) {
@@ -647,6 +663,12 @@
     return Object.fromEntries(order.map((o) => [o.k, o.x]));
   }
 
+  function plural(n, one, few, many) {
+    if (n % 1) return few;
+    const d = n % 10, dd = n % 100;
+    return d === 1 && dd !== 11 ? one : d >= 2 && d <= 4 && (dd < 12 || dd > 14) ? few : many;
+  }
+
   function roundRect(g, x, y, w, h, r) {
     g.beginPath();
     g.moveTo(x + r, y);
@@ -661,6 +683,215 @@
     g.font = `bold ${Math.max(9, 12 * s)}px Segoe UI, Arial, sans-serif`;
     g.textAlign = "center";
     g.fillText(text, x, y);
+  }
+
+
+  // ---------- ruler experiment (1.1.1) ----------
+  // A plastic ruler ~2 mm thick, clamped at the table edge: a cantilever, whose first mode is
+  // f = 1.875² / (2π) · √(E·h² / (12·ρ)) / L² ≈ 0.51 / L² (L in metres; E = 3 GPa, ρ = 1190 kg/m³).
+  const RULER_K = 0.513;
+  const RULER_CM = 30;
+
+  class RulerLab {
+    constructor(el) {
+      this.el = el;
+      this.free = 20; // cm hanging over the edge
+      this.pluckedAt = null;
+      this.canvas = document.createElement("canvas");
+      this.g = this.canvas.getContext("2d");
+      const bar = document.createElement("div");
+      bar.className = "player-controls";
+      bar.innerHTML =
+        '<button type="button" class="player-play">Щёлкнуть</button>' +
+        '<label>Свободный конец <input type="range" min="3" max="28" step="1"> <span class="lab-len"></span> см</label>' +
+        '<span class="player-score lab-info"></span>';
+      el.append(this.canvas, bar);
+      const range = bar.querySelector("input");
+      range.value = this.free;
+      this.lenLabel = bar.querySelector(".lab-len");
+      this.info = bar.querySelector(".lab-info");
+      range.addEventListener("input", () => { this.free = Number(range.value); this.pluckedAt = null; this.update(); });
+      bar.querySelector("button").addEventListener("click", () => this.pluck());
+      this.canvas.addEventListener("pointerdown", () => this.pluck());
+      this.resize();
+      window.addEventListener("resize", () => this.resize());
+    }
+
+    freq() { return RULER_K / (this.free / 100) ** 2; }
+
+    resize() {
+      const w = this.el.clientWidth, h = Math.round(Math.min(260, w * 0.45));
+      const dpr = window.devicePixelRatio || 1;
+      this.canvas.width = w * dpr; this.canvas.height = h * dpr; this.canvas.style.height = h + "px";
+      this.g.setTransform(dpr, 0, 0, dpr, 0, 0);
+      this.w = w; this.h = h;
+      this.update();
+    }
+
+    update() {
+      const f = this.freq();
+      this.lenLabel.textContent = this.free;
+      this.info.textContent = `≈ ${f < 20 ? f.toFixed(1).replace(".", ",") : Math.round(f)} колебаний в секунду — ` +
+        (f < 20 ? "глазами видно, ухо не слышит (ниже 20)" : "глазом не уследить, ухо слышит гудение");
+      this.draw(0);
+    }
+
+    pluck() {
+      audio();
+      const f = this.freq();
+      const t = ctx.currentTime;
+      hiss(t, 0.03, 0.3, "bandpass", 2500); // the flick of a finger
+      if (f >= 20) {
+        // a short ruler buzzes: louder against the table at low notes, fading in about a second
+        const o = ctx.createOscillator();
+        o.type = "sawtooth";
+        o.frequency.value = f;
+        const filter = ctx.createBiquadFilter();
+        filter.type = "lowpass";
+        filter.frequency.value = Math.min(4000, f * 6);
+        o.connect(filter);
+        filter.connect(envGain(t, 0.35, 1.2));
+        o.start(t);
+        o.stop(t + 1.3);
+      }
+      this.pluckedAt = performance.now();
+      const frame = () => {
+        const age = (performance.now() - this.pluckedAt) / 1000;
+        this.draw(age);
+        if (this.pluckedAt && age < 3) requestAnimationFrame(frame);
+      };
+      requestAnimationFrame(frame);
+    }
+
+    draw(age) {
+      const g = this.g, w = this.w, h = this.h;
+      g.fillStyle = COLORS.bg; g.fillRect(0, 0, w, h);
+      const cm = (w - 40) / 40; // pixels per centimetre; 40 cm of scene
+      const edge = 20 + 12 * cm; // table edge
+      const y0 = h * 0.42;
+      const freeLen = this.free * cm;
+      // table and hand
+      g.fillStyle = "#f6f6f2"; g.strokeStyle = COLORS.line; g.lineWidth = 1.5;
+      g.fillRect(0, y0 + 4, edge, h - y0); g.strokeRect(-1, y0 + 4, edge + 1, h - y0);
+      const clamp = edge - (RULER_CM - this.free) * cm; // where the ruler's far end lies on the table
+      g.fillStyle = "#7eaee6"; g.strokeStyle = COLORS.right;
+      roundRect(g, Math.max(4, edge - 7 * cm), y0 - 18, 5 * cm, 16, 5); g.fill(); g.stroke();
+      g.fillStyle = COLORS.muted; g.font = "11px Segoe UI, Arial, sans-serif"; g.textAlign = "center";
+      g.fillText("рука прижимает", Math.max(4, edge - 7 * cm) + 2.5 * cm, y0 - 24);
+
+      const f = this.freq();
+      const amp = this.pluckedAt ? Math.exp(-age / (f < 20 ? 1.4 : 0.5)) * Math.min(h * 0.32, freeLen * 0.5) : 0;
+      const shape = (x) => { const s = x / freeLen; return (s * s * (3 - s)) / 2; }; // bent cantilever
+      const ruler = (tip, alpha) => {
+        g.globalAlpha = alpha;
+        g.strokeStyle = COLORS.right; g.lineWidth = 7; g.lineCap = "butt";
+        g.beginPath(); g.moveTo(Math.max(0, clamp), y0); g.lineTo(edge, y0);
+        for (let x = 0; x <= freeLen; x += 4) g.lineTo(edge + x, y0 + tip * shape(x));
+        g.stroke();
+        g.globalAlpha = 1;
+      };
+      if (amp > 0.5 && f > 15) {
+        // too fast for the screen (and the eye): draw the blur between the extreme positions
+        for (let i = -4; i <= 4; i++) ruler((amp * i) / 4, 0.12);
+        ruler(0, 0.6);
+      } else {
+        ruler(amp * Math.cos(2 * Math.PI * f * age), 1);
+      }
+      // length marker
+      g.strokeStyle = COLORS.muted; g.lineWidth = 1;
+      g.beginPath(); g.moveTo(edge, h - 22); g.lineTo(edge + freeLen, h - 22); g.stroke();
+      g.fillStyle = COLORS.text; g.font = "bold 12px Segoe UI, Arial, sans-serif";
+      g.fillText(`${this.free} см свободно`, edge + freeLen / 2, h - 8);
+    }
+  }
+
+
+  // ---------- octave chain (1.3) ----------
+  const OCTAVES = [["контроктава", 55, "A1"], ["большая", 110, "A2"], ["малая", 220, "A3"], ["первая", 440, "A4"],
+                   ["вторая", 880, "A5"], ["третья", 1760, "A6"], ["четвёртая", 3520, "A7"]];
+
+  class OctaveLab {
+    constructor(el) {
+      this.el = el;
+      this.freq = 440;
+      this.text = "ля первой октавы — 440 колебаний в секунду";
+      this.canvas = document.createElement("canvas");
+      this.g = this.canvas.getContext("2d");
+      const bar = document.createElement("div");
+      bar.className = "player-controls";
+      bar.innerHTML =
+        '<button type="button" class="player-play lab-all">▶ Все ля снизу вверх</button>' +
+        '<button type="button" class="lab-sum">440 + 440 + 440 = 1320 Гц</button>' +
+        '<span class="player-score lab-info"></span>';
+      el.append(this.canvas, bar);
+      this.info = bar.querySelector(".lab-info");
+      bar.querySelector(".lab-all").addEventListener("click", () => this.playAll());
+      bar.querySelector(".lab-sum").addEventListener("click", () =>
+        this.play(1320, "1320 Гц — это уже не ля, а почти ми третьей октавы: частоты умножаются, а не складываются"));
+      this.canvas.addEventListener("pointerdown", (ev) => {
+        const box = this.canvas.getBoundingClientRect();
+        const i = Math.floor(((ev.clientX - box.left) / this.w) * OCTAVES.length);
+        const [name, f] = OCTAVES[Math.max(0, Math.min(OCTAVES.length - 1, i))];
+        this.play(f, `ля ${name === "контроктава" ? "контроктавы" : name.replace(/ая$/, "ой").replace(/ья$/, "ьей") + " октавы"} — ${f} колебаний в секунду`);
+      });
+      this.resize();
+      window.addEventListener("resize", () => this.resize());
+    }
+
+    resize() {
+      const w = this.el.clientWidth, h = Math.round(Math.min(230, w * 0.4));
+      const dpr = window.devicePixelRatio || 1;
+      this.canvas.width = w * dpr; this.canvas.height = h * dpr; this.canvas.style.height = h + "px";
+      this.g.setTransform(dpr, 0, 0, dpr, 0, 0);
+      this.w = w; this.h = h;
+      this.draw();
+    }
+
+    play(f, text, at) {
+      audio();
+      pianoNote(at || ctx.currentTime, 69 + 12 * Math.log2(f / 440), 0.9);
+      const show = () => { this.freq = f; this.text = text; this.draw(); };
+      if (at) setTimeout(show, (at - ctx.currentTime) * 1000); else show();
+    }
+
+    playAll() {
+      audio();
+      OCTAVES.forEach(([name, f], i) => this.play(f, `ля: ${f} Гц, каждый следующий звук вдвое чаще`, ctx.currentTime + 0.05 + i * 0.6));
+    }
+
+    draw() {
+      const g = this.g, w = this.w, h = this.h;
+      g.fillStyle = COLORS.bg; g.fillRect(0, 0, w, h);
+      // the wave: 1/55 s of it, so the lowest ля shows one period and every octave doubles the count
+      const waveH = h * 0.38, mid = 12 + waveH / 2;
+      const periods = this.freq / 55;
+      g.strokeStyle = COLORS.right; g.lineWidth = periods > 30 ? 1 : 2;
+      g.beginPath();
+      for (let x = 0; x <= w - 16; x += 0.5) {
+        const y = mid - (waveH / 2 - 4) * Math.sin((2 * Math.PI * periods * x) / (w - 16));
+        if (x === 0) g.moveTo(8 + x, y); else g.lineTo(8 + x, y);
+      }
+      g.stroke();
+      g.fillStyle = COLORS.muted; g.font = "11px Segoe UI, Arial, sans-serif"; g.textAlign = "left";
+      g.fillText(`${periods % 1 ? periods.toFixed(1).replace(".", ",") : periods} ${plural(periods, "колебание", "колебания", "колебаний")} за 1/55 секунды`, 8, 12 + waveH + 14);
+      // the chain of boxes, as in the diagram
+      const n = OCTAVES.length, gap = 8, bw = (w - 16 - gap * (n - 1)) / n, top = 12 + waveH + 26, bh = h - top - 8;
+      OCTAVES.forEach(([name, f, sci], i) => {
+        const x = 8 + i * (bw + gap);
+        const on = f === this.freq;
+        g.fillStyle = on ? "#e3eaf7" : "#fff";
+        roundRect(g, x, top, bw, bh, 8); g.fill();
+        g.strokeStyle = on ? COLORS.right : "#cfcfc6"; g.lineWidth = on ? 2.5 : 1.5; g.stroke();
+        g.textAlign = "center";
+        g.fillStyle = COLORS.muted; g.font = `${Math.min(12, bw * 0.13)}px Segoe UI, Arial, sans-serif`;
+        g.fillText(name, x + bw / 2, top + bh * 0.3);
+        g.fillStyle = COLORS.text; g.font = `bold ${Math.min(15, bw * 0.17)}px Segoe UI, Arial, sans-serif`;
+        g.fillText(`${f} Гц`, x + bw / 2, top + bh * 0.6);
+        g.fillStyle = COLORS.muted; g.font = `${Math.min(12, bw * 0.13)}px Segoe UI, Arial, sans-serif`;
+        g.fillText(sci, x + bw / 2, top + bh * 0.85);
+      });
+      this.info.textContent = this.text;
+    }
   }
 
   // Keys and MIDI go to the player last started or touched.
@@ -692,6 +923,8 @@
   }
 
   function init() {
+    document.querySelectorAll(".lab[data-lab=ruler]").forEach((el) => el._lab || (el._lab = new RulerLab(el)));
+    document.querySelectorAll(".lab[data-lab=octaves]").forEach((el) => el._lab || (el._lab = new OctaveLab(el)));
     document.querySelectorAll(".player").forEach((el) => {
       if (el._player) return;
       try {

@@ -62,3 +62,32 @@ table img {
   color: #555;
   font-size: 13px;
 }
+.lab {
+  margin: 1em 0 1.5em;
+  border: 1px solid #e2e2e2;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #fafaf7;
+}
+.lab canvas {
+  display: block;
+  width: 100%;
+}
+.player-controls button:not(.player-play):not([data-mode]) {
+  font: inherit;
+  padding: 4px 12px;
+  border: 1px solid #2f72c9;
+  border-radius: 6px;
+  background: #fff;
+  color: #2f72c9;
+  cursor: pointer;
+}
+
+// Paper gets the static diagrams and tables that sit next to every player; interactive parts and their hints are dropped.
+@media print {
+  .player,
+  .lab,
+  .web-only {
+    display: none !important;
+  }
+}

@@ -819,6 +819,23 @@
   const SECOND_MODE = 6.27;
   const RULER_CM = 30;
 
+  // What one hears from a ruler: its swing once that is audible (from 20 Hz), otherwise the hum of the second mode.
+  const rulerFreq = (cm) => RULER_K / (cm / 100) ** 2;
+  const rulerHeard = (cm) => (rulerFreq(cm) >= 20 ? rulerFreq(cm) : rulerFreq(cm) * SECOND_MODE);
+  // Free lengths (3–28 cm) at which the heard pitch is exactly a white note.
+  const RULER_NOTES = (() => {
+    const out = [];
+    for (let m = 12; m <= 108; m++) {
+      if (isBlack(m)) continue;
+      const f = midiFreq(m);
+      const swing = Math.sqrt(RULER_K / f) * 100, hum = Math.sqrt((RULER_K * SECOND_MODE) / f) * 100;
+      if (swing >= 3 && rulerFreq(swing) >= 20) out.push({ cm: swing, m });
+      if (hum <= 28 && rulerFreq(hum) < 20) out.push({ cm: hum, m });
+    }
+    return out;
+  })();
+  const cmText = (cm) => (Math.round(cm * 10) / 10).toString().replace(".", ",");
+
   class RulerLab {
     constructor(el) {
       this.el = el;
@@ -847,7 +864,9 @@
         const dx = ev.clientX - press.x;
         if (!press.moved && Math.abs(dx) > 4) press.moved = true;
         if (!press.moved) return;
-        const free = Math.max(3, Math.min(28, Math.round(press.free + dx / this.cm)));
+        let free = Math.max(3, Math.min(28, press.free + dx / this.cm));
+        const near = RULER_NOTES.reduce((a, b) => (Math.abs(b.cm - free) < Math.abs(a.cm - free) ? b : a));
+        free = Math.abs(near.cm - free) < 0.3 ? near.cm : Math.round(free * 10) / 10; // snap to a note within 3 mm
         if (free !== this.free) { this.free = free; this.pluckedAt = null; this.update(); }
       });
       const end = () => { if (press && !press.moved) this.pluck(); press = null; };
@@ -883,7 +902,8 @@
     update() {
       const f = this.freq();
       const f2 = Math.round(f * SECOND_MODE);
-      this.info.textContent = `≈ ${f < 20 ? f.toFixed(1).replace(".", ",") : Math.round(f)} колебаний в секунду — ` +
+      this.info.textContent = `слышно ${nearestNote(rulerHeard(this.free))} (${hz(rulerHeard(this.free))} Гц). ` +
+        `≈ ${f < 20 ? f.toFixed(1).replace(".", ",") : Math.round(f)} колебаний в секунду — ` +
         (f < 20 ? `само качание не слышно (ниже 20), слышны стук о стол и гул второго изгиба ≈ ${f2} Гц`
                 : `глазом не уследить, ухо слышит гудение; второй изгиб ≈ ${f2} Гц`);
       this.draw(0);
@@ -976,7 +996,19 @@
       g.strokeStyle = COLORS.muted; g.lineWidth = 1;
       g.beginPath(); g.moveTo(edge, h - 22); g.lineTo(edge + freeLen, h - 22); g.stroke();
       g.fillStyle = COLORS.text; g.font = "bold 12px Segoe UI, Arial, sans-serif";
-      g.fillText(`${this.free} см свободно`, edge + freeLen / 2, h - 8);
+      // white-note lengths as ticks on the length scale; only до is labelled, the rest would crowd at short lengths
+      RULER_NOTES.forEach(({ cm: L, m }) => {
+        const x = edge + L * cm;
+        g.strokeStyle = m % 12 === 0 ? COLORS.right : "#b8b8ae"; g.lineWidth = m % 12 === 0 ? 2 : 1;
+        g.beginPath(); g.moveTo(x, h - 28); g.lineTo(x, h - 16); g.stroke();
+        if (m % 12 === 0) {
+          g.fillStyle = COLORS.right; g.font = "bold 10px Segoe UI, Arial, sans-serif"; g.textAlign = "center";
+          g.fillText("до", x, h - 32);
+        }
+      });
+      g.fillStyle = COLORS.text; g.font = "bold 12px Segoe UI, Arial, sans-serif"; g.textAlign = "center";
+      const note = nearestNote(rulerHeard(this.free));
+      g.fillText(`${cmText(this.free)} см свободно — ${note}`, edge + freeLen / 2, h - 2);
       if (!this.pluckedAt || age > 2) arrows(g, edge + freeLen - 10, y0 - 30, "тяните");
     }
 
@@ -1703,6 +1735,18 @@
     return (Math.abs(exact - m) * 100 > 10 ? "≈ " : "") + NAMES[((m % 12) + 12) % 12];
   }
 
+  // Water levels (2–92 %) at which a bottle sounds a white note, for blowing or for tapping.
+  function bottleNoteLevels(mode) {
+    const out = [];
+    for (let m = 36; m <= 96; m++) {
+      if (isBlack(m)) continue;
+      const f = midiFreq(m);
+      const level = mode === "blow" ? 1 - (BLOW_EMPTY / f) ** 2 : ((TAP_EMPTY / f) ** 2 - 1) / 2.5;
+      if (level >= 0.02 && level <= 0.92) out.push({ level, m });
+    }
+    return out;
+  }
+
   class BottleLab {
     constructor(el) {
       this.el = el;
@@ -1756,7 +1800,11 @@
         if (!drag.moved) return;
         const box = this.canvas.getBoundingClientRect();
         const { top, bh } = this.geom();
-        this.levels[drag.i] = Math.max(0.02, Math.min(0.92, 1 - (ev.clientY - box.top - top) / bh));
+        let level = Math.max(0.02, Math.min(0.92, 1 - (ev.clientY - box.top - top) / bh));
+        const marks = bottleNoteLevels(this.mode);
+        const near = marks.reduce((a, b) => (Math.abs(b.level - level) < Math.abs(a.level - level) ? b : a));
+        if (Math.abs(near.level - level) < 0.025) level = near.level; // snap to a note
+        this.levels[drag.i] = level;
         this.draw();
       });
       const end = () => {
@@ -1822,6 +1870,14 @@
         g.fillStyle = "#cfe0f7"; g.fillRect(x, top + bh * (1 - level), bw, bh * level);
         g.fillStyle = COLORS.right; g.font = "bold 14px Segoe UI, Arial, sans-serif"; g.textAlign = "center";
         g.fillText("↕", x + bw / 2, top + bh * (1 - level) + 15);
+        // white-note levels as marks on the glass; до is labelled
+        bottleNoteLevels(this.mode).forEach(({ level: L, m }) => {
+          const y = top + bh * (1 - L), isDo = m % 12 === 0;
+          g.strokeStyle = isDo ? COLORS.right : "#9aa1ad"; g.lineWidth = isDo ? 2 : 1;
+          g.beginPath(); g.moveTo(x + bw - (isDo ? 12 : 7), y); g.lineTo(x + bw, y); g.stroke();
+          if (isDo) { g.fillStyle = COLORS.right; g.font = "bold 9px Segoe UI, Arial, sans-serif"; g.textAlign = "left"; g.fillText("до", x + bw + 2, y + 3); }
+        });
+        g.textAlign = "center";
         g.strokeStyle = COLORS.right; g.lineWidth = 2;
         g.beginPath();
         g.moveTo(x + bw * 0.32, top - 26); g.lineTo(x + bw * 0.32, top); g.lineTo(x, top); g.lineTo(x, top + bh);

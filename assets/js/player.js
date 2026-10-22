@@ -690,6 +690,9 @@
   // A plastic ruler ~2 mm thick, clamped at the table edge: a cantilever, whose first mode is
   // f = 1.875² / (2π) · √(E·h² / (12·ρ)) / L² ≈ 0.51 / L² (L in metres; E = 3 GPa, ρ = 1190 kg/m³).
   const RULER_K = 0.513;
+  // The second bending mode of a cantilever is (4.694 / 1.875)² ≈ 6.27 times the first: this is the hum one hears
+  // from a long ruler, pulsing with the slow swing, together with the slap against the table edge on every swing.
+  const SECOND_MODE = 6.27;
   const RULER_CM = 30;
 
   class RulerLab {
@@ -731,8 +734,10 @@
     update() {
       const f = this.freq();
       this.lenLabel.textContent = this.free;
+      const f2 = Math.round(f * SECOND_MODE);
       this.info.textContent = `≈ ${f < 20 ? f.toFixed(1).replace(".", ",") : Math.round(f)} колебаний в секунду — ` +
-        (f < 20 ? "глазами видно, ухо не слышит (ниже 20)" : "глазом не уследить, ухо слышит гудение");
+        (f < 20 ? `само качание не слышно (ниже 20), слышны стук о стол и гул второго изгиба ≈ ${f2} Гц`
+                : `глазом не уследить, ухо слышит гудение; второй изгиб ≈ ${f2} Гц`);
       this.draw(0);
     }
 
@@ -741,6 +746,26 @@
       const f = this.freq();
       const t = ctx.currentTime;
       hiss(t, 0.03, 0.3, "bandpass", 2500); // the flick of a finger
+      if (f < 20) {
+        // the slow swing itself is inaudible: what sounds is a slap on every swing and the pulsing second mode
+        const tau = 1.4, len = 3;
+        for (let k = 1; k / f < len; k++) {
+          const level = Math.exp(-k / f / tau);
+          if (level < 0.05) break;
+          hiss(t + k / f, 0.025, 0.35 * level, "bandpass", 1200);
+        }
+        const o = ctx.createOscillator(), g2 = ctx.createGain();
+        o.type = "triangle";
+        o.frequency.value = f * SECOND_MODE;
+        const curve = new Float32Array(300);
+        for (let i = 0; i < curve.length; i++) {
+          const s = (i / (curve.length - 1)) * len;
+          curve[i] = 0.25 * Math.exp(-s / tau) * Math.abs(Math.cos(2 * Math.PI * f * s));
+        }
+        g2.gain.setValueCurveAtTime(curve, t, len);
+        o.connect(g2); g2.connect(ctx.destination);
+        o.start(t); o.stop(t + len);
+      }
       if (f >= 20) {
         // a short ruler buzzes: louder against the table at low notes, fading in about a second
         const o = ctx.createOscillator();

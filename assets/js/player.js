@@ -1693,11 +1693,18 @@
   const BLOW_EMPTY = 180, TAP_EMPTY = 1400;
   const blowFreq = (level) => BLOW_EMPTY / Math.sqrt(1 - level);
   const tapFreq = (level) => TAP_EMPTY / Math.sqrt(1 + 2.5 * level);
+  const BOTTLES_START = [0.15, 0.29, 0.43, 0.57, 0.71, 0.85]; // an even staircase of water, not a scale
+  // The nearest note to a frequency, with "≈" when it is more than 10 cents off.
+  function nearestNote(f) {
+    const exact = 69 + 12 * Math.log2(f / 440), m = Math.round(exact);
+    return (Math.abs(exact - m) * 100 > 10 ? "≈ " : "") + NAMES[((m % 12) + 12) % 12];
+  }
+
   class BottleLab {
     constructor(el) {
       this.el = el;
       howto(el, "Как играть: щёлкните по бутылке — она зазвучит, в режиме «Дуть» — пока держите. Потяните бутылку вверх или вниз — изменится уровень воды.");
-      this.levels = [0.15, 0.3, 0.45, 0.6, 0.72, 0.85];
+      this.levels = [...BOTTLES_START];
       this.mode = "tap";
       this.lit = null;
       this.canvas = document.createElement("canvas");
@@ -1705,7 +1712,8 @@
       const bar = document.createElement("div");
       bar.className = "player-controls";
       bar.innerHTML = '<span class="player-mode"><button type="button" data-m="tap" class="on">Стучать ложкой</button><button type="button" data-m="blow">Дуть</button></span>' +
-        '<button type="button" data-organ="1">Настроить орган: до ре ми фа соль ля</button><span class="player-score lab-info"></span>';
+        '<button type="button" data-organ="1">Настроить орган: до ре ми фа соль ля</button>' +
+        '<button type="button" data-reset="1">Вернуть как было</button><span class="player-score lab-info"></span>';
       el.append(this.canvas, bar);
       this.info = bar.querySelector(".lab-info");
       bar.querySelectorAll("[data-m]").forEach((b) => b.addEventListener("click", () => {
@@ -1717,6 +1725,14 @@
         this.levels = [60, 62, 64, 65, 67, 69].map((m) => 1 - (BLOW_EMPTY / (440 * Math.pow(2, (m - 69) / 12))) ** 2);
         this.mode = "blow";
         bar.querySelectorAll("[data-m]").forEach((x) => x.classList.toggle("on", x.dataset.m === "blow"));
+        this.info.textContent = "Вода подобрана так, чтобы при выдувании звучали до, ре, ми, фа, соль, ля. Уровни идут неровно: " +
+          "чем выше нота, тем меньше воды нужно доливать. Орган настроен для «Дуть» — при стуке эти же бутылки звучат в обратном порядке и уже не гаммой.";
+        this.draw();
+      });
+      bar.querySelector("[data-reset]").addEventListener("click", () => {
+        this.levels = [...BOTTLES_START];
+        this.info.textContent = "Исходная настройка: вода налита ровной лесенкой. Звуки идут по порядку, но шаги между ними неравные " +
+          "и в ноты не попадают — поэтому под бутылками «≈».";
         this.draw();
       });
       let drag = null;
@@ -1751,7 +1767,7 @@
     }
     geom() {
       const n = this.levels.length, bw = Math.min(60, (this.w - 40) / n - 14);
-      return { n, bw, gap: (this.w - n * bw) / (n + 1), top: 46, bh: this.h - 100 };
+      return { n, bw, gap: (this.w - n * bw) / (n + 1), top: 46, bh: this.h - 116 };
     }
     bottleAt(x) {
       const { n, bw, gap } = this.geom();
@@ -1759,7 +1775,7 @@
       return undefined;
     }
     resize() {
-      const w = this.el.clientWidth, h = 240;
+      const w = this.el.clientWidth, h = 256;
       const dpr = window.devicePixelRatio || 1;
       this.canvas.width = w * dpr; this.canvas.height = h * dpr; this.canvas.style.height = h + "px";
       this.g.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -1813,6 +1829,8 @@
         g.fillText(`${Math.round(f)} Гц`, x + bw / 2, top + bh + 18);
         g.fillStyle = COLORS.muted; g.font = "11px Segoe UI, Arial, sans-serif";
         g.fillText(`${Math.round(level * 100)} % воды`, x + bw / 2, top + bh + 34);
+        g.fillStyle = COLORS.right; g.font = "bold 12px Segoe UI, Arial, sans-serif";
+        g.fillText(nearestNote(f), x + bw / 2, top + bh + 50);
       });
     }
   }

@@ -1152,23 +1152,43 @@
       g.fillStyle = COLORS.muted; g.font = "11px Segoe UI, Arial, sans-serif"; g.textAlign = "left";
       g.fillText("красные точки не двигаются. Дальше — 4-й изгиб в 34,4 раза чаще, 5-й в 56,8… Числа нецелые, поэтому линейка", 12, top + 110);
       g.fillText("не звучит чистой нотой, а гудит и дребезжит; у струны такие колебания идут ровно в 2, 3, 4 раза чаще. Показано замедленно.", 12, top + 124);
-      // the sum: how the tip really moves — the three modes at once, each with its own (illustrative) size
-      const y0 = top + 190, x0 = 12, len = w - 24, amps = [[1, 26, "#7eaee6"], [6.27, 9, "#e0892b"], [17.55, 4, "#8e44ad"]];
+      // The sum, drawn twice. Left: the ruler itself, bent by all three modes at once (same slow motion as the panels
+      // above, so the sum of what they show is visible). Right: the tip's motion in time. Sizes are illustrative.
+      const modes = [[1, 1, "#7eaee6"], [2, 0.35, "#e0892b"], [3, 0.15, "#8e44ad"]];
+      const ratios = [1, 6.27, 17.55];
+      const vis = (n) => 0.4 * Math.sqrt(ratios[n - 1]); // the panels' slow-motion speeds
       g.fillStyle = COLORS.text; g.font = "bold 12px Segoe UI, Arial, sans-serif"; g.textAlign = "left";
-      g.fillText("Сумма: как движется кончик линейки во времени", x0, top + 148);
-      g.strokeStyle = "#e4e4dc"; g.lineWidth = 1; g.beginPath(); g.moveTo(x0, y0); g.lineTo(x0 + len, y0); g.stroke();
-      const periods = 2, shift = now * 0.25; // two periods of the swing, scrolling slowly
-      const part = (k, a, x) => a * Math.sin(2 * Math.PI * k * (periods * x / len + shift));
-      amps.forEach(([k, a, color]) => {
+      g.fillText("Сумма: линейка гнётся всеми изгибами сразу", 12, top + 148);
+      const lw = Math.round(w * 0.42), rx0 = 12, rlen = lw - 40, ry = top + 192;
+      g.fillStyle = "#f6f6f2"; g.strokeStyle = COLORS.line; g.fillRect(rx0, ry - 16, 10, 32); g.strokeRect(rx0, ry - 16, 10, 32);
+      const bend = (n, s) => cantilever(n, s) / cantilever(n, 1);
+      const shapeAt = (s, only) => modes.reduce((sum, [n, a]) =>
+        only && only !== n ? sum : sum + a * bend(n, s) * Math.sin(2 * Math.PI * vis(n) * now), 0);
+      modes.forEach(([n, , color]) => {
+        g.strokeStyle = color; g.lineWidth = 1.2; g.globalAlpha = 0.8; g.beginPath();
+        for (let s = 0; s <= 1.0001; s += 0.01) g.lineTo(rx0 + 10 + s * rlen, ry - 24 * shapeAt(s, n));
+        g.stroke(); g.globalAlpha = 1;
+      });
+      g.strokeStyle = this.mat.color; g.lineWidth = 5; g.beginPath();
+      for (let s = 0; s <= 1.0001; s += 0.01) g.lineTo(rx0 + 10 + s * rlen, ry - 24 * shapeAt(s));
+      g.stroke();
+      // right: the tip in time, with the true ratios 1 : 6.27 : 17.55, scrolling slowly
+      const tx0 = lw + 10, tlen = w - lw - 22, ty = ry;
+      g.strokeStyle = "#e4e4dc"; g.lineWidth = 1; g.beginPath(); g.moveTo(tx0, ty); g.lineTo(tx0 + tlen, ty); g.stroke();
+      g.fillStyle = COLORS.muted; g.font = "10px Segoe UI, Arial, sans-serif";
+      g.fillText("кончик линейки во времени", tx0, top + 164);
+      const periods = 2, shift = now * 0.25;
+      const part = (i, x) => modes[i][1] * 24 * Math.sin(2 * Math.PI * ratios[i] * (periods * x / tlen + shift));
+      modes.forEach(([, , color], i) => {
         g.strokeStyle = color; g.lineWidth = 1.2; g.beginPath();
-        for (let x = 0; x <= len; x += 1) g.lineTo(x0 + x, y0 - part(k, a, x));
+        for (let x = 0; x <= tlen; x += 1) g.lineTo(tx0 + x, ty - part(i, x));
         g.stroke();
       });
-      g.strokeStyle = this.mat.color === "#7d8793" ? "#333" : COLORS.text; g.lineWidth = 2.5; g.beginPath();
-      for (let x = 0; x <= len; x += 1) g.lineTo(x0 + x, y0 - amps.reduce((s, [k, a]) => s + part(k, a, x), 0));
+      g.strokeStyle = this.mat.color; g.lineWidth = 2.5; g.beginPath();
+      for (let x = 0; x <= tlen; x += 1) g.lineTo(tx0 + x, ty - modes.reduce((s, m, i) => s + part(i, x), 0));
       g.stroke();
       g.fillStyle = COLORS.muted; g.font = "11px Segoe UI, Arial, sans-serif";
-      g.fillText("тонкие линии — 1-й, 2-й и 3-й изгибы по отдельности (размеры условные), толстая — их сумма: так кончик и движется, и такой звук мы слышим", x0, top + 234);
+      g.fillText("тонкие — 1-й (голубой), 2-й (оранжевый) и 3-й (фиолетовый) изгибы, толстая — их сумма: так линейка и движется, и такой звук мы слышим", 12, top + 234);
     }
   }
 

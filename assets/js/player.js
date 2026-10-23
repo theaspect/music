@@ -34,11 +34,46 @@
 
   // Computer keys by KeyboardEvent.code. Drums follow the kit rows; piano is the usual A-row layout from the lowest до.
   const DRUM_KEYS = { KeyQ: "cr", KeyW: "t1", KeyE: "rd", KeyA: "hh", KeyZ: "hp", KeyS: "sn", KeyD: "t2", Space: "kk", KeyF: "ft" };
-  const KEY_LABELS = { KeyQ: "Q", KeyW: "W", KeyE: "E", KeyA: "A", KeyZ: "Z", KeyS: "S", KeyD: "D", Space: "␣", KeyF: "F",
-                       KeyT: "T", KeyG: "G", KeyY: "Y", KeyH: "H", KeyU: "U", KeyJ: "J", KeyK: "K", KeyO: "O", KeyL: "L",
-                       KeyP: "P", Semicolon: ";", Quote: "'" };
-  const PIANO_KEYS = ["KeyA", "KeyW", "KeyS", "KeyE", "KeyD", "KeyF", "KeyT", "KeyG", "KeyY", "KeyH", "KeyU", "KeyJ",
-                      "KeyK", "KeyO", "KeyL", "KeyP", "Semicolon", "Quote"];
+  // Laptop keys for the piano-like keyboards: the home row a s d f + j k l ; gives до … до (fingers rest there in
+  // both English and Russian layouts), the row above gives the black keys: w e = до♯ ре♯, y u i = фа♯ соль♯ ля♯.
+  // Keys are matched by KeyboardEvent.code, so the layout does not matter for playing — only for the letters shown.
+  const NOTE_KEYS = { KeyA: 0, KeyW: 1, KeyS: 2, KeyE: 3, KeyD: 4, KeyF: 5, KeyY: 6, KeyJ: 7, KeyU: 8, KeyK: 9, KeyI: 10, KeyL: 11, Semicolon: 12 };
+  const KEY_LETTERS = {
+    en: { KeyA: "A", KeyW: "W", KeyS: "S", KeyE: "E", KeyD: "D", KeyF: "F", KeyY: "Y", KeyJ: "J", KeyU: "U", KeyK: "K", KeyI: "I", KeyL: "L", Semicolon: ";",
+          KeyQ: "Q", KeyZ: "Z", Space: "␣" },
+    ru: { KeyA: "Ф", KeyW: "Ц", KeyS: "Ы", KeyD: "В", KeyE: "У", KeyF: "А", KeyY: "Н", KeyJ: "О", KeyU: "Г", KeyK: "Л", KeyI: "Ш", KeyL: "Д", Semicolon: "Ж",
+          KeyQ: "Й", KeyZ: "Я", Space: "␣" },
+  };
+  let keyLayout = "en";
+  // The keyboard (a lab or a player) the laptop keys play: the one touched last. Only it shows the key caps.
+  let activeKeys = null;
+  function setActiveKeys(lab) {
+    if (activeKeys === lab) return;
+    const prev = activeKeys;
+    activeKeys = lab;
+    if (prev && prev.redraw) prev.redraw();
+    if (lab && lab.redraw) lab.redraw();
+  }
+  if (navigator.keyboard && navigator.keyboard.getLayoutMap) {
+    navigator.keyboard.getLayoutMap().then((map) => {
+      keyLayout = /[а-яё]/i.test(map.get("KeyA") || "") ? "ru" : "en";
+      if (activeKeys && activeKeys.redraw) activeKeys.redraw();
+    }).catch(() => {});
+  }
+  // Small key caps on the keys of an active keyboard: on black keys near their top, on white keys below the black ones.
+  function drawKeyCaps(g, keys, base, top, keysH) {
+    Object.entries(NOTE_KEYS).forEach(([code, off]) => {
+      const m = base + off, k = keys[m];
+      if (!k) return;
+      const s = Math.max(12, Math.min(18, k.w * 0.62)), x = k.x + k.w / 2 - s / 2;
+      const y = isBlack(m) ? top + 4 : top + keysH * 0.64 + 3;
+      g.fillStyle = "#fff"; g.strokeStyle = COLORS.right; g.lineWidth = 1.2;
+      roundRect(g, x, y, s, s, 3); g.fill(); g.stroke();
+      g.fillStyle = COLORS.right; g.font = `bold ${Math.round(s * 0.6)}px Segoe UI, Arial, sans-serif`; g.textAlign = "center";
+      g.fillText(KEY_LETTERS[keyLayout][code], x + s / 2, y + s * 0.72);
+    });
+  }
+
   // General MIDI drum notes, which electronic kits send over USB.
   const GM_DRUMS = { 35: "kk", 36: "kk", 37: "sn", 38: "sn", 40: "sn", 42: "hh", 44: "hp", 46: "oh", 41: "ft", 43: "ft",
                      45: "t2", 47: "t2", 48: "t1", 50: "t1", 49: "cr", 52: "cr", 55: "cr", 57: "cr", 51: "rd", 53: "rd", 59: "rd" };
@@ -377,6 +412,7 @@
       this.button.textContent = "■ Стоп";
       this.resetScore();
       activePlayer = this;
+      setActiveKeys(this);
       // Start one window early: notes fall in from the top and the metronome counts in.
       this.anchorBeat = -BEATS_VISIBLE;
       this.anchorTime = ctx.currentTime + 0.05;
@@ -576,7 +612,7 @@
     hit(key, soundKey) {
       audio();
       activePlayer = this;
-      activeSynth = null;
+      setActiveKeys(this);
       let stop;
       if (this.kind === "piano") stop = holdNote(midiFreq(key));
       else DRUM_SOUND[soundKey || key](ctx.currentTime);
@@ -588,6 +624,19 @@
         setTimeout(() => !this.playing && this.draw(IDLE), 250);
       }
       return stop;
+    }
+
+    redraw() { this.draw(this.playing ? this.beatAt(ctx.currentTime) : IDLE); }
+    keyDown(code) {
+      if (this.kind === "piano") {
+        const off = NOTE_KEYS[code];
+        if (off === undefined || this.keyBase === undefined || this.keyBase + off > this.song.hi) return undefined;
+        return this.hit(this.keyBase + off) || true;
+      }
+      const key = DRUM_KEYS[code];
+      if (key === undefined) return undefined;
+      this.hit(key);
+      return true;
     }
 
     tolerance() {
@@ -658,13 +707,13 @@
     }
 
     keyHint(padKey, x, y, s) {
-      if (this.mode !== "play") return;
+      if (activeKeys !== this) return;
       const code = Object.keys(DRUM_KEYS).find((c) => DRUM_KEYS[c] === padKey);
       if (!code) return;
       this.g.fillStyle = COLORS.muted;
       this.g.font = `${Math.max(9, 11 * s)}px Segoe UI, Arial, sans-serif`;
       this.g.textAlign = "center";
-      this.g.fillText(code === "Space" ? "Space" : KEY_LABELS[code], x, y);
+      this.g.fillText(KEY_LETTERS[keyLayout][code], x, y);
     }
 
     drawPiano(cur) {
@@ -729,9 +778,7 @@
         g.font = font(Math.min(13, kw * 0.3));
         g.fillText(LETTERS[m % 12], k.x + k.w / 2, top + keysH + 16);
       });
-      this.pianoKeyCodes = {};
-      const base = lo + ((12 - (lo % 12)) % 12);
-      PIANO_KEYS.forEach((code, i) => { if (base + i <= hi) this.pianoKeyCodes[code] = base + i; });
+      this.keyBase = lo + ((12 - (lo % 12)) % 12); // laptop keys start at the lowest до on screen
       for (let m = lo; m <= hi; m++) {
         if (!isBlack(m)) continue;
         const k = keyX[m];
@@ -744,14 +791,7 @@
           g.fillText(NAMES[m % 12], k.x + k.w / 2, top + keysH * 0.62 - 8);
         }
       }
-      if (this.mode === "play") {
-        Object.entries(this.pianoKeyCodes).forEach(([code, m]) => {
-          const k = keyX[m];
-          g.fillStyle = isBlack(m) ? "#1f4f8f" : COLORS.right;
-          g.font = font(12, true);
-          g.fillText(KEY_LABELS[code], k.x + k.w / 2, top + (isBlack(m) ? keysH * 0.3 : keysH * 0.62));
-        });
-      }
+      if (activeKeys === this) drawKeyCaps(g, keyX, this.keyBase, top, keysH);
       this.liveMarks().forEach((m) => {
         const k = keyX[m.key];
         if (!k) return;
@@ -1273,12 +1313,8 @@
       holdable(this.canvas, (x, y) => {
         const m = ChordLab.prototype.keyAt.call(this, x, y);
         if (m === undefined) return;
-        this.pc = m; // 0…12: 12 is до of the next octave
-        this.down = m;
-        this.freq = null;
-        this.draw();
-        const stop = holdNote(this.noteFreq(this.pc, this.oct));
-        return () => { stop(); this.down = null; this.draw(); };
+        setActiveKeys(this);
+        return this.press(m);
       });
       this.resize();
       window.addEventListener("resize", () => this.resize());
@@ -1286,6 +1322,17 @@
 
     // notes of the octave as MIDI-like numbers on a fixed one-octave keyboard (до … си), so the layout never moves
     noteFreq(pc, oct) { return midiFreq(12 * (OCTAVES[oct][2] + 1) + pc); }
+
+    press(m) {
+      this.pc = m; // 0…12: 12 is до of the next octave
+      this.down = m;
+      this.freq = null;
+      this.draw();
+      const stop = holdNote(this.noteFreq(this.pc, this.oct));
+      return () => { stop(); if (this.down === m) this.down = null; this.draw(); };
+    }
+    keyDown(code) { const off = NOTE_KEYS[code]; if (off === undefined) return undefined; audio(); return this.press(off); }
+    redraw() { this.draw(); }
 
     resize() {
       const w = this.el.clientWidth, h = Math.round(Math.min(300, w * 0.5));
@@ -1357,6 +1404,7 @@
         g.fillText(NAMES[m], k.x + k.w / 2, top + keysH * 0.6 - 22);
         g.fillText(hz(this.noteFreq(m, this.oct)), k.x + k.w / 2, top + keysH * 0.6 - 8);
       }
+      if (activeKeys === this) drawKeyCaps(g, this.keys, 0, top, keysH);
       if (this.freq) { this.info.textContent = this.text; return; }
       const next = this.pc === 12;
       const octIdx = this.oct + (next ? 1 : 0);
@@ -1691,13 +1739,20 @@
         const box = this.canvas.getBoundingClientRect();
         const m = this.keyAt(ev.clientX - box.left, ev.clientY - box.top);
         if (m === undefined) return;
-        if (this.chosen.has(m)) this.chosen.delete(m);
-        else { this.chosen.add(m); audio(); pianoNote(ctx.currentTime, m, 0.5); }
-        this.draw();
+        setActiveKeys(this);
+        this.toggle(m);
       });
       this.resize();
       window.addEventListener("resize", () => this.resize());
     }
+
+    toggle(m) {
+      if (this.chosen.has(m)) this.chosen.delete(m);
+      else { this.chosen.add(m); audio(); pianoNote(ctx.currentTime, m, 0.5); }
+      this.draw();
+    }
+    keyDown(code) { const off = NOTE_KEYS[code]; if (off === undefined) return undefined; this.toggle(60 + off); return true; }
+    redraw() { this.draw(); }
 
     resize() {
       const w = this.el.clientWidth, h = Math.round(Math.min(190, w * 0.32)) + 24;
@@ -1773,6 +1828,7 @@
         roundRect(g, k.x, top - 1, k.w, keysH * 0.62 + 1, 4); g.fill();
       }
       octaveBrackets(g, this.keys, this.lo, this.hi, top + keysH + 8);
+      if (activeKeys === this) drawKeyCaps(g, this.keys, 60, top, keysH);
       const notes = [...this.chosen].sort((a, b) => a - b);
       const names = notes.map((m, i) => NAMES[m % 12] + (i && m - notes[0] >= 12 ? " (октавой выше)" : "")).join(" + ");
       const steps = notes.slice(1).map((m, i) => m - notes[i]);
@@ -1787,22 +1843,30 @@
   class KeyboardLab {
     constructor(el) {
       this.el = el;
-      howto(el, "Как играть: нажимайте клавиши — нота звучит, пока клавиша нажата.");
+      howto(el, "Как играть: нажимайте клавиши — нота звучит, пока клавиша нажата. С ноутбука: щёлкните по любой клавиатуре в книге — на ней появятся буквы, и она будет играть от клавиш ноутбука: белые — A S D F и J K L ;, чёрные — W E и Y U I.");
       this.lo = 60; this.hi = 84; // до4 … до6, as in the diagram
       this.down = null;
       this.canvas = document.createElement("canvas");
       this.g = this.canvas.getContext("2d");
       el.append(this.canvas);
+      this.pressed = new Set();
       holdable(this.canvas, (x, y) => {
         const m = ChordLab.prototype.keyAt.call(this, x, y);
         if (m === undefined) return;
-        this.down = m; this.draw();
-        const stop = holdNote(440 * Math.pow(2, (m - 69) / 12));
-        return () => { stop(); this.down = null; this.draw(); };
+        setActiveKeys(this);
+        return this.press(m);
       });
       this.resize();
       window.addEventListener("resize", () => this.resize());
     }
+    press(m) {
+      this.pressed.add(m); this.draw();
+      const stop = holdNote(midiFreq(m));
+      return () => { stop(); this.pressed.delete(m); this.draw(); };
+    }
+    keyDown(code) { const off = NOTE_KEYS[code]; if (off === undefined) return undefined; audio(); return this.press(60 + off); }
+    redraw() { this.draw(); }
+
     resize() {
       const w = this.el.clientWidth, h = Math.round(Math.min(210, w * 0.34)) + 24;
       const dpr = window.devicePixelRatio || 1;
@@ -1820,7 +1884,7 @@
       for (let m = this.lo; m <= this.hi; m++) {
         if (isBlack(m)) continue;
         const k = this.keys[m];
-        g.fillStyle = m === this.down ? COLORS.flash : m % 12 === 0 ? "#e3eaf7" : "#fff";
+        g.fillStyle = this.pressed.has(m) ? COLORS.flash : m % 12 === 0 ? "#e3eaf7" : "#fff";
         roundRect(g, k.x + 1, top, k.w - 2, keysH, 6); g.fill();
         g.strokeStyle = "#cfcfc6"; g.lineWidth = 1.5; g.stroke();
         g.fillStyle = "#222"; g.font = `${m % 12 === 0 ? "bold " : ""}${Math.min(15, kw * 0.33)}px Segoe UI, Arial, sans-serif`;
@@ -1831,10 +1895,11 @@
       for (let m = this.lo; m <= this.hi; m++) {
         if (!isBlack(m)) continue;
         const k = this.keys[m];
-        g.fillStyle = m === this.down ? COLORS.flash : "#c5c5bc";
+        g.fillStyle = this.pressed.has(m) ? COLORS.flash : "#c5c5bc";
         roundRect(g, k.x, top - 1, k.w, keysH * 0.62 + 1, 4); g.fill();
       }
       octaveBrackets(g, this.keys, this.lo, this.hi, top + keysH + 32);
+      if (activeKeys === this) drawKeyCaps(g, this.keys, 60, top, keysH);
     }
   }
 
@@ -2640,8 +2705,7 @@
         const box = this.canvas.getBoundingClientRect();
         const x = ev.clientX - box.left, y = ev.clientY - box.top;
         audio();
-        activeSynth = this;
-        activePlayer = null;
+        setActiveKeys(this);
         const handle = (this.handles || []).find((h) => Math.hypot(h.x - x, h.y - y) < 18);
         const m = handle ? undefined : ChordLab.prototype.keyAt.call(this, x, y);
         if (!handle && m === undefined) return;
@@ -2743,6 +2807,9 @@
         if (!this.voices.size) this.lastOff = performance.now();
       };
     }
+
+    keyDown(code) { const off = NOTE_KEYS[code]; if (off === undefined) return undefined; audio(); return this.noteOn(60 + off); }
+    redraw() { this.draw(); }
 
     resize() {
       const w = this.el.clientWidth, all = this.stages.length > 1;
@@ -2920,21 +2987,9 @@
         roundRect(g, k.x, top - 1, k.w, keysH * 0.62 + 1, 4); g.fill();
       }
       octaveBrackets(g, this.keys, this.lo, this.hi, top + keysH + 8);
+      if (activeKeys === this) drawKeyCaps(g, this.keys, 60, top, keysH);
     }
   }
-  // Computer keys play the synth last touched: the A row from до of its lowest octave, as on the players.
-  let activeSynth = null;
-  const synthHeld = {};
-  document.addEventListener("keydown", (ev) => {
-    const s = activeSynth;
-    if (!s || ev.repeat || ev.ctrlKey || ev.metaKey || ev.altKey || synthHeld[ev.code]) return;
-    const i = PIANO_KEYS.indexOf(ev.code);
-    if (i < 0) return;
-    ev.preventDefault();
-    audio();
-    synthHeld[ev.code] = s.noteOn(60 + i);
-  });
-  document.addEventListener("keyup", (ev) => { if (synthHeld[ev.code]) { synthHeld[ev.code](); delete synthHeld[ev.code]; } });
 
 
   // ---------- lesson 2: tell instruments apart by ear (recordings from Wikimedia Commons) ----------
@@ -3401,10 +3456,8 @@
       holdable(this.canvas, (x, y) => {
         const m = ChordLab.prototype.keyAt.call(this, x, y);
         if (m === undefined) return;
-        this.down = m; this.draw();
-        const stop = holdNote(midiFreq(m));
-        this.typed(m);
-        return () => { stop(); this.down = null; this.draw(); };
+        setActiveKeys(this);
+        return this.press(m);
       });
       this.resize();
       window.addEventListener("resize", () => this.resize());
@@ -3457,6 +3510,20 @@
       this.draw();
     }
 
+    press(m) {
+      this.down = m; this.draw();
+      const stop = holdNote(midiFreq(m));
+      this.typed(m);
+      return () => { stop(); if (this.down === m) this.down = null; this.draw(); };
+    }
+    keyDown(code) {
+      const off = NOTE_KEYS[code];
+      if (off === undefined || !EAR_LEVELS[this.level].keys) return undefined;
+      audio();
+      return this.press(60 + off);
+    }
+    redraw() { this.draw(); }
+
     resize() {
       const w = this.el.clientWidth, h = Math.round(Math.min(170, w * 0.28));
       const dpr = window.devicePixelRatio || 1;
@@ -3489,6 +3556,7 @@
         g.fillStyle = m === this.down ? COLORS.flash : "#c5c5bc";
         roundRect(g, k.x, top - 1, k.w, keysH * 0.62 + 1, 4); g.fill();
       }
+      if (activeKeys === this) drawKeyCaps(g, this.keys, 60, top, keysH);
     }
   }
 
@@ -3572,19 +3640,22 @@
     }
   }
 
-  // Keys and MIDI go to the player last started or touched.
+  // Laptop keys go to the keyboard touched last (setActiveKeys); MIDI goes to the player touched last.
   let activePlayer = null;
-  document.addEventListener("keydown", (ev) => {
-    const p = activePlayer;
-    if (!p || ev.repeat || ev.ctrlKey || ev.metaKey || ev.altKey) return;
-    if (/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement && document.activeElement.tagName)) return;
-    const key = p.kind === "piano" ? p.pianoKeyCodes && p.pianoKeyCodes[ev.code] : DRUM_KEYS[ev.code];
-    if (key === undefined) return;
-    ev.preventDefault();
-    const stop = p.hit(key);
-    if (stop) heldKeys[ev.code] = stop;
-  });
   const heldKeys = {};
+  document.addEventListener("keydown", (ev) => {
+    if (ev.key && ev.key.length === 1) { // learn the layout from what is typed, for the letters on the caps
+      const layout = /[а-яё]/i.test(ev.key) ? "ru" : /[a-z]/i.test(ev.key) ? "en" : null;
+      if (layout && layout !== keyLayout) { keyLayout = layout; if (activeKeys && activeKeys.redraw) activeKeys.redraw(); }
+    }
+    const lab = activeKeys;
+    if (!lab || !lab.keyDown || ev.repeat || ev.ctrlKey || ev.metaKey || ev.altKey || heldKeys[ev.code]) return;
+    if (/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement && document.activeElement.tagName)) return;
+    const stop = lab.keyDown(ev.code);
+    if (stop === undefined) return;
+    ev.preventDefault();
+    if (typeof stop === "function") heldKeys[ev.code] = stop;
+  });
   document.addEventListener("keyup", (ev) => {
     if (heldKeys[ev.code]) { heldKeys[ev.code](); delete heldKeys[ev.code]; }
   });

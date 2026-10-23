@@ -3275,6 +3275,17 @@
       this.render();
     }
 
+    // Clips come from a shuffled deck: each one once before any repeats, and never the same one twice in a row.
+    nextClip() {
+      if (!this.deck || !this.deck.length) {
+        this.deck = CLIPS.slice();
+        for (let i = this.deck.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [this.deck[i], this.deck[j]] = [this.deck[j], this.deck[i]]; }
+        if (this.deck[this.deck.length - 1] === this.current) this.deck.unshift(this.deck.pop());
+      }
+      this.current = this.deck.pop();
+      this.answered = false; this.family = null;
+    }
+
     play(clip) {
       this.start = clip[3];
       this.audio.src = COMMONS + clip[2];
@@ -3306,7 +3317,7 @@
       const next = document.createElement("button");
       next.type = "button"; next.className = "player-play"; next.textContent = this.current ? "▶ Ещё раз" : "▶ Следующая запись";
       next.addEventListener("click", () => {
-        if (!this.current || this.answered) { this.current = CLIPS[Math.floor(Math.random() * CLIPS.length)]; this.answered = false; this.family = null; }
+        if (!this.current) this.nextClip();
         this.play(this.current);
         this.render();
       });
@@ -3314,7 +3325,7 @@
       if (this.current && this.answered) {
         const again = document.createElement("button");
         again.type = "button"; again.textContent = "▶ Следующая запись";
-        again.addEventListener("click", () => { this.current = CLIPS[Math.floor(Math.random() * CLIPS.length)]; this.answered = false; this.family = null; this.play(this.current); this.render(); });
+        again.addEventListener("click", () => { this.nextClip(); this.play(this.current); this.render(); });
         row.append(again);
       }
       b.append(row);

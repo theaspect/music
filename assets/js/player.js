@@ -925,6 +925,16 @@
       let press = null;
       this.canvas.addEventListener("pointerdown", (ev) => {
         if (press) return; // the ruler follows one finger; extra touches are ignored
+        const box = this.canvas.getBoundingClientRect(), x = ev.clientX - box.left, y = ev.clientY - box.top;
+        if (y > this.sceneH - 72 && y < this.sceneH && x > this.edge) {
+          // the note scale: move the ruler to the tick under the pointer (or to that length), no flick
+          const L = (x - this.edge) / this.cm;
+          const near = rulerNotes(this.mat.K).reduce((a, b) => (!a || Math.abs(b.cm - L) < Math.abs(a.cm - L) ? b : a), null);
+          const free = near && Math.abs(near.cm - L) * this.cm < 12 ? near.cm : Math.round(L * 10) / 10;
+          this.free = Math.max(3, Math.min(28, free)); this.pluckedAt = null; this.update();
+          ev.preventDefault();
+          return;
+        }
         press = { id: ev.pointerId, x: ev.clientX, y: ev.clientY, free: this.free, mode: null };
         this.canvas.setPointerCapture(ev.pointerId);
         ev.preventDefault();
@@ -1053,6 +1063,7 @@
       const cm = (w - 40) / 40; // pixels per centimetre; 40 cm of scene
       this.cm = cm;
       const edge = 20 + 12 * cm; // table edge
+      this.edge = edge;
       const y0 = h * 0.42;
       const freeLen = this.free * cm;
       // table and hand
@@ -1839,12 +1850,12 @@
   class StringLab {
     constructor(el) {
       this.el = el;
-      howto(el, "Как играть: тяните синий кружок-палец вдоль струны или жмите кнопки с нотами. Щёлкните по струне — она зазвучит.");
+      howto(el, "Как играть: тяните синий кружок-палец вдоль струны или жмите кнопки с нотами. Щёлкните по струне — она зазвучит, или оттяните её вверх или вниз и отпустите: чем дальше, тем громче.");
       this.part = 1; // sounding share of the string
       this.tension = 1;
       this.pluckedAt = null;
       this.canvas = document.createElement("canvas");
-      this.canvas.style.touchAction = "pan-y";
+      this.canvas.style.touchAction = "none"; // the finger-dot is dragged sideways, the string is pulled up or down
       this.g = this.canvas.getContext("2d");
       const bar = document.createElement("div");
       bar.className = "player-controls";
@@ -1903,25 +1914,48 @@
       };
       this.canvas.addEventListener("pointerdown", (ev) => {
         const y = ev.clientY - this.canvas.getBoundingClientRect().top;
+        if ((y > this.y0 + 30 && y < this.y0 + 100) || (y < this.y0 - 30 && y > this.y0 - 64)) {
+          // a click on a note's label moves the finger there, without plucking
+          const pos = posAt(ev);
+          const near = this.marks().reduce((a, m) => (!a || Math.abs(1 - m[0] - pos) < Math.abs(1 - a[0] - pos) ? m : a), null);
+          if (near && Math.abs(1 - near[0] - pos) * this.len < 16) { this.part = near[0]; this.update(); ev.preventDefault(); }
+          return;
+        }
         if (y > this.y0 + 30 || y < this.y0 - 36) return;
         const pos = posAt(ev);
         if (pos < -0.02 || pos > 1.02) return;
         const onFinger = Math.abs(pos - (1 - this.part)) * this.len < 18 && ![...presses.values()].some((q) => q.onFinger);
-        presses.set(ev.pointerId, { x: ev.clientX, pos, onFinger, moved: false });
+        presses.set(ev.pointerId, { x: ev.clientX, y: ev.clientY, pos, onFinger, moved: false, pulling: false });
         this.canvas.setPointerCapture(ev.pointerId);
         ev.preventDefault();
       });
       this.canvas.addEventListener("pointermove", (ev) => {
         const press = presses.get(ev.pointerId);
-        if (!press || !press.onFinger) return; // only the finger-dot is dragged; other touches are plucks
-        if (!press.moved && Math.abs(ev.clientX - press.x) > 4) press.moved = true;
-        if (press.moved) setFinger(posAt(ev));
+        if (!press) return;
+        if (press.onFinger) { // the finger-dot is dragged along the string
+          if (!press.moved && Math.abs(ev.clientX - press.x) > 4) press.moved = true;
+          if (press.moved) setFinger(posAt(ev));
+          return;
+        }
+        // any other touch on the sounding part pulls the string up or down, like a real pluck
+        const dy = ev.clientY - press.y;
+        if (!press.pulling && Math.abs(dy) > 4) press.pulling = true;
+        if (!press.pulling) return;
+        const at = Math.max(1 - this.part + 0.02, Math.min(0.98, press.pos));
+        this.pull = { at, dy: Math.max(-30, Math.min(30, dy)) };
+        this.pluckedAt = null;
+        this.draw(0);
       });
       const end = (ev) => {
         const press = presses.get(ev.pointerId);
         if (!press) return;
         presses.delete(ev.pointerId);
-        if (!press.onFinger) this.pluck();
+        if (press.onFinger) return;
+        if (press.pulling && this.pull) {
+          const strength = Math.abs(this.pull.dy) / 30;
+          this.pull = null;
+          if (strength > 0.05) this.pluck(strength); else this.draw(0);
+        } else this.pluck(1);
       };
       ["pointerup", "pointercancel"].forEach((e) => this.canvas.addEventListener(e, end));
       this.canvas.addEventListener("contextmenu", (ev) => ev.preventDefault());
@@ -1958,9 +1992,11 @@
         (this.tension !== 1 ? `; натяжение ×${this.tension.toFixed(2).replace(".", ",")} поднимает звук в √${this.tension.toFixed(2).replace(".", ",")} раза` : "");
       this.draw(0);
     }
-    pluck() {
+    // strength 0…1: how far the string was pulled; a click is the strongest
+    pluck(strength = 1) {
       audio();
-      pluck(ctx.currentTime, this.freq(), 0.5);
+      this.strength = strength;
+      pluck(ctx.currentTime, this.freq(), 0.5 * strength);
       this.update();
       this.pluckedAt = performance.now();
       const frame = () => {
@@ -2026,9 +2062,16 @@
       g.fillStyle = "#555"; g.fillRect(x0 - 8, y0 - 12, 8, 24); g.fillRect(x0 + len, y0 - 12, 8, 24);
       g.strokeStyle = "#c9c9c0"; g.lineWidth = 3;
       g.beginPath(); g.moveTo(x0, y0); g.lineTo(fx, y0); g.stroke();
-      const amp = this.pluckedAt ? 16 * Math.exp(-age / 0.8) : 0;
+      const amp = this.pluckedAt ? 16 * Math.exp(-age / 0.8) * (this.strength ?? 1) : 0;
       const seg = len * this.part;
-      for (let k = amp > 0.5 ? -3 : 0; k <= (amp > 0.5 ? 3 : 0); k++) {
+      if (this.pull) { // held: the string bent to a triangle at the pulling point
+        const px = x0 + len * this.pull.at, py = y0 + this.pull.dy;
+        g.strokeStyle = COLORS.right; g.lineWidth = 3;
+        g.beginPath(); g.moveTo(fx, y0); g.lineTo(px, py); g.lineTo(x0 + len, y0); g.stroke();
+        g.fillStyle = COLORS.right; g.font = "bold 12px Segoe UI, Arial, sans-serif"; g.textAlign = "center";
+        g.fillText(`отпустите — сила ${Math.round((Math.abs(this.pull.dy) / 30) * 100)} %`, px, y0 - 58);
+      }
+      for (let k = this.pull ? 1 : amp > 0.5 ? -3 : 0; k <= (this.pull ? 0 : amp > 0.5 ? 3 : 0); k++) {
         g.strokeStyle = COLORS.right; g.globalAlpha = amp > 0.5 ? 0.25 : 1; g.lineWidth = 3;
         g.beginPath();
         for (let x = 0; x <= seg; x += 3) g.lineTo(fx + x, y0 + ((amp * k) / 3) * Math.sin((Math.PI * x) / seg));
@@ -2077,7 +2120,7 @@
   class BottleLab {
     constructor(el) {
       this.el = el;
-      howto(el, "Как играть: щёлкните по бутылке — она зазвучит, в режиме «Дуть» — пока держите; можно несколькими пальцами. Потяните бутылку вверх или вниз — изменится уровень воды.");
+      howto(el, "Как играть: щёлкните по бутылке — она зазвучит, в режиме «Дуть» — пока держите; можно несколькими пальцами. Уровень воды тяните сбоку от бутылки, за стрелку ↕ или риски нот.");
       this.levels = [...BOTTLES_START];
       this.mode = "tap";
       this.lit = new Map(); // bottle → time it lit up (Infinity while blown)
@@ -2129,39 +2172,53 @@
       this.canvas.addEventListener("pointerdown", (ev) => {
         const box = this.canvas.getBoundingClientRect();
         const i = this.bottleAt(ev.clientX - box.left);
-        if (i === undefined) return;
-        const drag = { i, y: ev.clientY, moved: false };
+        if (i === undefined) {
+          // beside the bottles: set the water of the nearest one to this height, silently, and keep dragging it
+          const { top, bh } = this.geom(), y = ev.clientY - box.top;
+          if (y < top || y > top + bh) return;
+          const near = this.nearestBottle(ev.clientX - box.left);
+          drags.set(ev.pointerId, { i: near, y: ev.clientY, outside: true });
+          this.canvas.setPointerCapture(ev.pointerId);
+          this.pour(near, ev.clientY);
+          return;
+        }
+        const drag = { i, y: ev.clientY }; // inside a bottle: sound only, no pouring
         drags.set(ev.pointerId, drag);
         this.canvas.setPointerCapture(ev.pointerId);
         if (this.mode === "blow") { audio(); drag.stop = this.blow(i); }
       });
       this.canvas.addEventListener("pointermove", (ev) => {
         const drag = drags.get(ev.pointerId);
-        if (!drag) return;
-        if (Math.abs(ev.clientY - drag.y) > 5 && !drag.moved) {
-          drag.moved = true;
-          if (drag.stop) { drag.stop(); drag.stop = null; }
-        }
-        if (!drag.moved) return;
-        const box = this.canvas.getBoundingClientRect();
-        const { top, bh } = this.geom();
-        let level = Math.max(0.02, Math.min(0.92, 1 - (ev.clientY - box.top - top) / bh));
-        const marks = bottleNoteLevels(this.mode);
-        const near = marks.reduce((a, b) => (Math.abs(b.level - level) < Math.abs(a.level - level) ? b : a));
-        if (Math.abs(near.level - level) < 0.02) level = near.level; // snap to a note
-        this.levels[drag.i] = level;
-        this.draw();
+        if (drag && drag.outside) this.pour(drag.i, ev.clientY);
       });
       const end = (ev) => {
         const drag = drags.get(ev.pointerId);
         if (!drag) return;
         drags.delete(ev.pointerId);
         if (drag.stop) drag.stop();
-        else if (!drag.moved && this.mode === "tap") this.sound(drag.i);
+        else if (!drag.outside && this.mode === "tap") this.sound(drag.i);
       };
       ["pointerup", "pointercancel"].forEach((e) => this.canvas.addEventListener(e, end));
       this.resize();
       window.addEventListener("resize", () => this.resize());
+    }
+
+    // Water level of bottle i from a pointer height, snapped to the nearest note mark.
+    pour(i, clientY) {
+      const box = this.canvas.getBoundingClientRect();
+      const { top, bh } = this.geom();
+      let level = Math.max(0.02, Math.min(0.92, 1 - (clientY - box.top - top) / bh));
+      const marks = bottleNoteLevels(this.mode);
+      const near = marks.reduce((a, b) => (Math.abs(b.level - level) < Math.abs(a.level - level) ? b : a));
+      if (Math.abs(near.level - level) < 0.02) level = near.level; // snap to a note
+      this.levels[i] = level;
+      this.draw();
+    }
+    nearestBottle(x) {
+      const { n, bw, gap } = this.geom();
+      let best = 0;
+      for (let i = 1; i < n; i++) if (Math.abs(gap + i * (bw + gap) + bw / 2 - x) < Math.abs(gap + best * (bw + gap) + bw / 2 - x)) best = i;
+      return best;
     }
 
     geom() {
@@ -2170,7 +2227,7 @@
     }
     bottleAt(x) {
       const { n, bw, gap } = this.geom();
-      for (let i = 0; i < n; i++) { const bx = gap + i * (bw + gap); if (x >= bx - 6 && x <= bx + bw + 6) return i; }
+      for (let i = 0; i < n; i++) { const bx = gap + i * (bw + gap); if (x >= bx && x <= bx + bw) return i; }
       return undefined;
     }
     resize() {
@@ -2209,14 +2266,16 @@
         g.fillStyle = lit ? "#fff3cc" : "#fff";
         g.fillRect(x, top, bw, bh);
         g.fillStyle = "#cfe0f7"; g.fillRect(x, top + bh * (1 - level), bw, bh * level);
-        g.fillStyle = COLORS.right; g.font = "bold 14px Segoe UI, Arial, sans-serif"; g.textAlign = "center";
-        g.fillText("↕", x + bw / 2, top + bh * (1 - level) + 15);
+        g.fillStyle = COLORS.right; g.font = "bold 15px Segoe UI, Arial, sans-serif"; g.textAlign = "center";
+        g.fillText("↕", x - 9, top + bh * (1 - level) + 5);
+        g.strokeStyle = COLORS.right; g.lineWidth = 2;
+        g.beginPath(); g.moveTo(x - 4, top + bh * (1 - level)); g.lineTo(x, top + bh * (1 - level)); g.stroke();
         // white-note levels as marks on the glass; до is labelled
         bottleNoteLevels(this.mode).forEach(({ level: L, m }) => {
           const y = top + bh * (1 - L), isDo = m % 12 === 0;
           g.strokeStyle = isDo ? COLORS.right : "#9aa1ad"; g.lineWidth = isDo ? 2 : 1;
-          g.beginPath(); g.moveTo(x + bw - (isDo ? 12 : 7), y); g.lineTo(x + bw, y); g.stroke();
-          if (isDo) { g.fillStyle = COLORS.right; g.font = "bold 9px Segoe UI, Arial, sans-serif"; g.textAlign = "left"; g.fillText("до" + "₀₁₂₃₄₅₆₇₈"[Math.floor(m / 12) - 1], x + bw + 2, y + 3); }
+          g.beginPath(); g.moveTo(x + bw - (isDo ? 10 : 6), y); g.lineTo(x + bw + (isDo ? 8 : 5), y); g.stroke();
+          if (isDo) { g.fillStyle = COLORS.right; g.font = "bold 9px Segoe UI, Arial, sans-serif"; g.textAlign = "left"; g.fillText("до" + "₀₁₂₃₄₅₆₇₈"[Math.floor(m / 12) - 1], x + bw + 9, y + 3); }
         });
         g.strokeStyle = COLORS.right; g.lineWidth = 2;
         g.beginPath();

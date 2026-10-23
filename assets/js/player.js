@@ -2681,6 +2681,295 @@
     }
   }
 
+
+  // ---------- clapping with a microphone (3.4) ----------
+  // Onsets are sudden jumps of short-time energy in the microphone signal. Microphone and speakers add a delay of their
+  // own, measured once by clapping along with clicks ("калибровка") and subtracted. Echo cancellation stays on so the
+  // page's own clicks are removed from the microphone; noise suppression and auto gain are off, they flatten claps.
+  // Two hands are told apart by brightness (share of high frequencies right after the hit): a slap on a table is
+  // brighter than a pat on the knee. Everything is computed in the browser; nothing leaves the device.
+  const CLAP_EXERCISES = [
+    { name: "1. Каждая доля", bars: 8, hits: (b) => [0, 1, 2, 3].map((x) => ({ beat: b * 4 + x })),
+      text: "хлопайте на каждый щелчок: «раз, два, три, четыре»" },
+    { name: "2. Восьмые", bars: 8, hits: (b) => [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5].map((x) => ({ beat: b * 4 + x })),
+      text: "два хлопка на щелчок: «раз-и, два-и»" },
+    { name: "3. Метроном пропадает", bars: 8, clickOff: (b) => b % 4 >= 2, hits: (b) => [0, 1, 2, 3].map((x) => ({ beat: b * 4 + x })),
+      text: "каждые два такта метроном замолкает на два — держите темп сами" },
+    { name: "4. Повтори ритм", bars: 8, call: true,
+      hits: (b) => (b % 2 ? [[0, 1, 2, 3], [0, 1, 1.5, 2, 3], [0, 0.5, 1, 2, 3], [0, 1, 2, 2.5, 3, 3.5]][(b >> 1) % 4] : []).map((x) => ({ beat: b * 4 + x })),
+      text: "в нечётных тактах хлопает опыт, в чётных повторяйте его ритм" },
+    { name: "5. Две руки", bars: 8, hands: true,
+      hits: (b) => (b < 4 ? [[0, "R"], [1, "L"], [2, "R"], [3, "L"]] : [[0, "R"], [0.5, "L"], [1, "R"], [1.5, "L"], [2, "R"], [2.5, "L"], [3, "R"], [3.5, "L"]])
+        .map(([x, hand]) => ({ beat: b * 4 + x, hand })),
+      text: "правая — по столу, левая — по колену: сначала правая на «раз» и «три», левая на «два» и «четыре», потом по очереди восьмыми" },
+  ];
+  const CLAP_GOOD = 0.04, CLAP_OK = 0.09; // seconds: green within 40 ms, orange within 90 ms
+
+  class ClapLab {
+    constructor(el) {
+      this.el = el;
+      howto(el, "Как играть: «Включить микрофон», затем один раз «Калибровка» — похлопайте вместе с 8 щелчками. Выберите упражнение и нажмите «Старт». Лучше в наушниках; без них включите «мигание». Звук микрофона обрабатывается только в браузере.");
+      this.bpm = 70; this.ex = 0; this.flashOnly = false;
+      this.latency = Number((() => { try { return localStorage.getItem("clap-latency"); } catch (e) { return null; } })()) || 0;
+      this.handModel = null; this.hits = []; this.running = false;
+      this.canvas = document.createElement("canvas");
+      this.canvas.style.touchAction = "manipulation";
+      this.g = this.canvas.getContext("2d");
+      const pick = document.createElement("div");
+      pick.className = "player-controls";
+      pick.innerHTML = '<span class="player-mode">' + CLAP_EXERCISES.map((e, i) => `<button type="button" data-ex="${i}"${i ? "" : ' class="on"'}>${e.name}</button>`).join("") + "</span>";
+      const bar = document.createElement("div");
+      bar.className = "player-controls";
+      bar.innerHTML = '<button type="button" data-a="mic">🎤 Включить микрофон</button>' +
+        '<button type="button" data-a="cal">Калибровка</button><button type="button" data-a="hands">Запомнить руки</button>' +
+        '<button type="button" class="player-play" data-a="go">▶ Старт</button>' +
+        '<label>Темп <input type="range" min="50" max="120" step="5" value="70"> <span class="clap-bpm">70</span> BPM</label>' +
+        '<span class="player-mode"><button type="button" data-m="sound" class="on">Метроном звуком</button><button type="button" data-m="flash">Миганием</button></span>' +
+        '<span class="player-score lab-info"></span>';
+      el.append(pick, this.canvas, bar);
+      this.info = bar.querySelector(".lab-info");
+      pick.querySelectorAll("[data-ex]").forEach((b) => b.addEventListener("click", () => {
+        pick.querySelectorAll("[data-ex]").forEach((x) => x.classList.toggle("on", x === b));
+        this.ex = Number(b.dataset.ex); this.stop(); this.say(CLAP_EXERCISES[this.ex].text); this.draw();
+      }));
+      bar.querySelectorAll("[data-m]").forEach((b) => b.addEventListener("click", () => {
+        bar.querySelectorAll("[data-m]").forEach((x) => x.classList.toggle("on", x === b));
+        this.flashOnly = b.dataset.m === "flash";
+      }));
+      const range = bar.querySelector("input");
+      range.addEventListener("input", () => { this.bpm = Number(range.value); bar.querySelector(".clap-bpm").textContent = this.bpm; });
+      bar.querySelector("[data-a=mic]").addEventListener("click", () => this.openMic());
+      bar.querySelector("[data-a=cal]").addEventListener("click", () => this.calibrate());
+      bar.querySelector("[data-a=hands]").addEventListener("click", () => this.learnHands());
+      this.goButton = bar.querySelector("[data-a=go]");
+      this.goButton.addEventListener("click", () => (this.running ? this.stop() : this.start()));
+      this.resize();
+      window.addEventListener("resize", () => this.resize());
+      this.say(this.latency ? `Задержка устройства уже измерена: ${Math.round(this.latency * 1000)} мс.` : "Сначала включите микрофон и пройдите калибровку.");
+    }
+
+    say(text) { this.info.textContent = text; }
+
+    async openMic() {
+      audio();
+      if (this.mic) return true;
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { this.say("Этот браузер не даёт доступ к микрофону."); return false; }
+      try {
+        this.stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: false, autoGainControl: false } });
+      } catch (e) { this.say("Микрофон не разрешён. Разрешите его в настройках браузера для этой страницы."); return false; }
+      const src = ctx.createMediaStreamSource(this.stream);
+      const proc = ctx.createScriptProcessor(512, 1, 1);
+      const mute = ctx.createGain(); mute.gain.value = 0;
+      src.connect(proc); proc.connect(mute); mute.connect(ctx.destination);
+      this.mic = { src, proc, avg: 1e-6, last: -1, pending: null, tail: new Float32Array(0) };
+      proc.onaudioprocess = (e) => this.listen(e);
+      this.say("Микрофон включён. Похлопайте — на ленте появятся точки. Затем «Калибровка».");
+      this.loop();
+      return true;
+    }
+
+    // Energy in 64-sample chunks; an onset is a chunk far louder than the recent average, at most every 70 ms.
+    listen(e) {
+      const d = e.inputBuffer.getChannelData(0), sr = ctx.sampleRate, m = this.mic;
+      const t0 = (e.playbackTime || ctx.currentTime) - d.length / sr;
+      if (m.pending) { this.finishOnset(d); }
+      for (let i = 0; i + 64 <= d.length; i += 64) {
+        let en = 0;
+        for (let k = i; k < i + 64; k++) en += d[k] * d[k];
+        en /= 64;
+        const time = t0 + i / sr;
+        if (en > 1e-5 && en > m.avg * 10 && time - m.last > 0.07) {
+          m.last = time;
+          m.pending = { time, samples: Array.from(d.subarray(i, Math.min(d.length, i + 768))) };
+          if (m.pending.samples.length >= 768) this.finishOnset(null);
+        }
+        m.avg = m.avg * 0.995 + en * 0.005;
+      }
+    }
+
+    // Brightness of the first ~16 ms after the onset: energy of the first difference over the energy of the signal.
+    finishOnset(next) {
+      const m = this.mic, s = m.pending.samples;
+      if (next) for (let i = 0; i < next.length && s.length < 768; i++) s.push(next[i]);
+      if (s.length < 768 && next !== null) return;
+      let raw = 0, diff = 0;
+      for (let i = 1; i < s.length; i++) { raw += s[i] * s[i]; diff += (s[i] - s[i - 1]) ** 2; }
+      const onset = { time: m.pending.time - this.latency, bright: diff / (raw || 1e-9) };
+      m.pending = null;
+      if (this.collector) this.collector(onset); else this.addHit(onset);
+    }
+
+    handOf(onset) {
+      if (!this.handModel) return null;
+      const { R, L } = this.handModel;
+      return Math.abs(onset.bright - R) < Math.abs(onset.bright - L) ? "R" : "L";
+    }
+
+    addHit(onset) {
+      const hand = this.handOf(onset);
+      this.hits.push({ ...onset, hand });
+      if (this.hits.length > 400) this.hits.shift();
+    }
+
+    clickAt(time, accent) { tone(time, accent ? 1800 : 1200, 0, 0.04, accent ? 0.3 : 0.18, "square"); }
+    clapAt(time) { [0, 0.008, 0.017].forEach((d, i) => hiss(time + d, 0.05 + i * 0.03, 0.35, "bandpass", 1400)); }
+
+    async calibrate() {
+      if (!(await this.openMic())) return;
+      this.stop();
+      const beat = 60 / 90, start = ctx.currentTime + 0.6, clicks = [];
+      for (let i = 0; i < 12; i++) { const at = start + i * beat; this.clickAt(at, i % 4 === 0); if (i >= 4) clicks.push(at); }
+      this.say("Калибровка: 4 щелчка отсчёта, затем хлопайте вместе с 8 щелчками…");
+      const got = [];
+      this.collector = (o) => got.push(o.time + this.latency);
+      await new Promise((r) => setTimeout(r, (12 * beat + 1) * 1000));
+      this.collector = null;
+      const offsets = clicks.map((c) => got.reduce((best, g) => (Math.abs(g - c) < Math.abs(best - c) ? g : best), Infinity) - c)
+        .filter((o) => Math.abs(o) < beat / 2).sort((a, b) => a - b);
+      if (offsets.length < 5) { this.say(`Услышано ${offsets.length} хлопков из 8. Хлопайте громче или ближе к микрофону и повторите.`); return; }
+      this.latency = offsets[Math.floor(offsets.length / 2)];
+      try { localStorage.setItem("clap-latency", String(this.latency)); } catch (e) { /* private mode */ }
+      this.say(`Задержка устройства: ${Math.round(this.latency * 1000)} мс, теперь она вычитается. Можно начинать.`);
+    }
+
+    async learnHands() {
+      if (!(await this.openMic())) return;
+      this.stop();
+      const collect = (label) => new Promise((resolve) => {
+        const got = [];
+        this.say(label);
+        this.collector = (o) => { got.push(o.bright); this.say(`${label} — ${got.length} из 4`); if (got.length === 4) { this.collector = null; resolve(got); } };
+      });
+      const R = await collect("Ударьте 4 раза правой ладонью по столу");
+      const L = await collect("Теперь 4 раза левой ладонью по колену");
+      const mean = (a) => a.reduce((s, x) => s + x, 0) / a.length;
+      const spread = (a) => Math.sqrt(a.reduce((s, x) => s + (x - mean(a)) ** 2, 0) / a.length);
+      this.handModel = { R: mean(R), L: mean(L) };
+      const separation = Math.abs(mean(R) - mean(L)) / (spread(R) + spread(L) + 1e-9);
+      this.say(separation > 2 ? "Руки различаются хорошо. Выберите упражнение «5. Две руки»." :
+        "Звуки похожи, руки будут путаться. Бейте правой по столу звонче, а левой по колену мягче, или возьмите книгу вместо колена, и повторите.");
+    }
+
+    async start() {
+      if (!(await this.openMic())) return;
+      const ex = CLAP_EXERCISES[this.ex];
+      if (ex.hands && !this.handModel) { this.say("Сначала «Запомнить руки»."); return; }
+      this.beat = 60 / this.bpm;
+      this.t0 = ctx.currentTime + 0.5 + 4 * this.beat; // after a bar of count-in
+      this.expect = [];
+      for (let b = 0; b < ex.bars; b++) ex.hits(b).forEach((h) => this.expect.push(h));
+      this.clickOn = (beat) => beat < 0 || !(ex.clickOff && ex.clickOff(Math.floor(beat / 4)));
+      for (let i = -4; i < ex.bars * 4; i++) {
+        const at = this.t0 + i * this.beat;
+        if (!this.flashOnly && this.clickOn(i)) this.clickAt(at, ((i % 4) + 4) % 4 === 0);
+      }
+      if (ex.call) for (let b = 0; b < ex.bars; b += 2) ex.hits(b + 1).forEach((h) => this.clapAt(this.t0 + (h.beat - 4) * this.beat));
+      this.hits = [];
+      this.running = true;
+      this.goButton.textContent = "■ Стоп";
+      this.say(`${ex.name}: ${ex.text}. Сначала такт отсчёта.`);
+      clearTimeout(this.endTimer);
+      this.endTimer = setTimeout(() => this.finish(), (this.t0 - ctx.currentTime + ex.bars * 4 * this.beat + 0.5) * 1000);
+      this.loop();
+    }
+
+    stop() {
+      if (!this.running) return;
+      this.running = false;
+      clearTimeout(this.endTimer);
+      this.goButton.textContent = "▶ Старт";
+      this.draw();
+    }
+
+    // Every expected hit gets the nearest detected one within half the gap to its neighbours.
+    judge() {
+      const ex = CLAP_EXERCISES[this.ex], beat = this.beat, used = new Set();
+      return this.expect.map((h, i) => {
+        const at = this.t0 + h.beat * beat;
+        const gap = Math.min(i ? h.beat - this.expect[i - 1].beat : 1, i < this.expect.length - 1 ? this.expect[i + 1].beat - h.beat : 1) * beat / 2;
+        let best = null;
+        this.hits.forEach((x, j) => { if (!used.has(j) && Math.abs(x.time - at) < gap && (!best || Math.abs(x.time - at) < Math.abs(best.x.time - at))) best = { x, j }; });
+        if (best) used.add(best.j);
+        return { ...h, at, dev: best ? best.x.time - at : null, wrongHand: ex.hands && best && best.x.hand && best.x.hand !== h.hand };
+      });
+    }
+
+    finish() {
+      this.stop();
+      const res = this.judge(), got = res.filter((r) => r.dev !== null);
+      if (!got.length) { this.say("Хлопков не услышано. Проверьте микрофон и громкость хлопков."); return; }
+      const mean = got.reduce((s, r) => s + r.dev, 0) / got.length;
+      const good = got.filter((r) => Math.abs(r.dev) <= CLAP_GOOD).length;
+      const hands = CLAP_EXERCISES[this.ex].hands ? `, не той рукой: ${got.filter((r) => r.wrongHand).length}` : "";
+      const tend = Math.abs(mean) < 0.015 ? "ни спешите, ни отстаёте" : mean < 0 ? `в среднем спешите на ${Math.round(-mean * 1000)} мс` : `в среднем отстаёте на ${Math.round(mean * 1000)} мс`;
+      this.say(`Точно: ${good} из ${res.length}, пропущено ${res.length - got.length}${hands}; ${tend}.`);
+    }
+
+    resize() {
+      const w = this.el.clientWidth, h = 210;
+      const dpr = window.devicePixelRatio || 1;
+      this.canvas.width = w * dpr; this.canvas.height = h * dpr; this.canvas.style.height = h + "px";
+      this.g.setTransform(dpr, 0, 0, dpr, 0, 0);
+      this.w = w; this.h = h;
+      this.draw();
+    }
+
+    loop() {
+      if (this.looping) return;
+      this.looping = true;
+      const tick = () => { this.draw(); if (this.mic || this.running) requestAnimationFrame(tick); else this.looping = false; };
+      requestAnimationFrame(tick);
+    }
+
+    draw() {
+      const g = this.g, w = this.w, h = this.h;
+      g.fillStyle = COLORS.bg; g.fillRect(0, 0, w, h);
+      const now = ctx ? ctx.currentTime : 0;
+      const ex = CLAP_EXERCISES[this.ex];
+      // the flashing beat: bright on every beat, red on the first of the bar, grey when the metronome is silent
+      const beatNow = this.running ? (now - this.t0) / this.beat : null;
+      const near = beatNow !== null ? Math.round(beatNow) : null;
+      const lit = near !== null && Math.abs(beatNow - near) * this.beat < 0.1 && (this.flashOnly || true) && this.clickOn(near);
+      g.fillStyle = lit ? (((near % 4) + 4) % 4 === 0 ? COLORS.bad : COLORS.flash) : "#e9e9e2";
+      g.beginPath(); g.arc(60, h / 2 - 10, 38, 0, Math.PI * 2); g.fill();
+      g.fillStyle = COLORS.text; g.font = "bold 13px Segoe UI, Arial, sans-serif"; g.textAlign = "center";
+      g.fillText(beatNow === null ? "доля" : beatNow < 0 ? `отсчёт ${4 + Math.floor(beatNow) + 1}` : `такт ${Math.floor(beatNow / 4) + 1}`, 60, h / 2 + 46);
+      // timeline of two bars around now
+      const x0 = 130, x1 = w - 16, span = 8;
+      const from = this.running ? Math.max(-4, Math.floor(beatNow / 4) * 4 - (beatNow % 4 < 2 ? 4 : 0)) : 0;
+      const bx = (beat) => x0 + ((beat - from) / span) * (x1 - x0);
+      for (let b = from; b <= from + span; b++) {
+        g.strokeStyle = b % 4 === 0 ? "#b5b5ac" : "#e4e4dc"; g.lineWidth = b % 4 === 0 ? 2 : 1;
+        g.beginPath(); g.moveTo(bx(b), 24); g.lineTo(bx(b), h - 30); g.stroke();
+        if (b % 4 === 0) { g.fillStyle = COLORS.muted; g.font = "10px Segoe UI, Arial, sans-serif"; g.textAlign = "left"; g.fillText(b < 0 ? "отсчёт" : `такт ${b / 4 + 1}`, bx(b) + 3, 18); }
+      }
+      if (this.running && beatNow >= from && beatNow <= from + span) {
+        g.strokeStyle = COLORS.right; g.lineWidth = 2; g.beginPath(); g.moveTo(bx(beatNow), 24); g.lineTo(bx(beatNow), h - 30); g.stroke();
+      }
+      const midY = h / 2 - 10;
+      const res = this.running || this.expect ? this.judge() : [];
+      res.forEach((r) => {
+        if (r.beat < from || r.beat > from + span) return;
+        const x = bx(r.beat), y = ex.hands ? (r.hand === "R" ? midY - 22 : midY + 22) : midY;
+        g.strokeStyle = COLORS.muted; g.lineWidth = 1.5; g.beginPath(); g.arc(x, y, 9, 0, Math.PI * 2); g.stroke();
+        if (ex.hands) { g.fillStyle = COLORS.muted; g.font = "10px Segoe UI, Arial, sans-serif"; g.textAlign = "center"; g.fillText(r.hand === "R" ? "П" : "Л", x, y + 4); }
+        if (r.dev === null) return;
+        const hx = x + (r.dev / this.beat / span) * (x1 - x0);
+        g.fillStyle = r.wrongHand ? "#8e44ad" : Math.abs(r.dev) <= CLAP_GOOD ? COLORS.good : Math.abs(r.dev) <= CLAP_OK ? "#e0892b" : COLORS.bad;
+        g.beginPath(); g.arc(hx, y, 6, 0, Math.PI * 2); g.fill();
+        g.font = "10px Segoe UI, Arial, sans-serif"; g.textAlign = "center";
+        g.fillText(`${r.dev > 0 ? "+" : ""}${Math.round(r.dev * 1000)}`, hx, y + (ex.hands && r.hand === "R" ? -14 : 22));
+      });
+      // raw hits outside the exercise (testing the microphone)
+      if (!this.running && !this.expect) this.hits.filter((x) => now - x.time < 3).forEach((x) => {
+        g.fillStyle = COLORS.right; g.beginPath(); g.arc(x1 - (now - x.time) / 3 * (x1 - x0), midY, 5, 0, Math.PI * 2); g.fill();
+      });
+      g.fillStyle = COLORS.muted; g.font = "11px Segoe UI, Arial, sans-serif"; g.textAlign = "left";
+      g.fillText("кружок — когда надо хлопнуть; точка — ваш хлопок: зелёный точно (±40 мс), оранжевый чуть мимо, красный мимо" +
+        (ex.hands ? ", фиолетовый — не той рукой" : "") + "; числа — мс", 130, h - 10);
+    }
+  }
+
   // Keys and MIDI go to the player last started or touched.
   let activePlayer = null;
   document.addEventListener("keydown", (ev) => {
@@ -2738,6 +3027,7 @@
     document.querySelectorAll(".lab[data-lab=chords]").forEach((el) => el._lab || (el._lab = new ChordLab(el)));
     document.querySelectorAll(".lab[data-lab=synth]").forEach((el) => el._lab || (el._lab = new SynthLab(el)));
     document.querySelectorAll(".lab[data-lab=listen]").forEach((el) => el._lab || (el._lab = new ListenLab(el)));
+    document.querySelectorAll(".lab[data-lab=clap]").forEach((el) => el._lab || (el._lab = new ClapLab(el)));
     document.querySelectorAll(".lab[data-lab=keyboard]").forEach((el) => el._lab || (el._lab = new KeyboardLab(el)));
     document.querySelectorAll(".lab[data-lab=string]").forEach((el) => el._lab || (el._lab = new StringLab(el)));
     document.querySelectorAll(".lab[data-lab=bottles]").forEach((el) => el._lab || (el._lab = new BottleLab(el)));

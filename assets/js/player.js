@@ -803,6 +803,14 @@
 
   // Brackets under the white keys of each octave, labelled with its Russian name (как на схеме клавиатуры в 1.2).
   const OCTAVE_NAMES = ["субконтроктава", "контроктава", "большая октава", "малая октава", "первая октава", "вторая октава", "третья октава", "четвёртая октава", "пятая октава"];
+  // The one way to name an octave (o = Math.floor(midi / 12); до первой октавы is midi 60, o = 5): full «первая октава»,
+  // mid «первая», short «перв.» for tight spots. Scientific pitch (C4) only as a second form in explanations.
+  const OCTAVE_SHORT = { "субконтроктава": "субконтр.", "контроктава": "контр.", "большая": "больш.", "малая": "мал.", "первая": "перв.",
+                         "вторая": "втор.", "третья": "трет.", "четвёртая": "четв.", "пятая": "пят." };
+  function octaveName(o, form) {
+    const full = OCTAVE_NAMES[o - 1] || "", mid = full.replace(" октава", "");
+    return form === "full" ? full : form === "short" ? OCTAVE_SHORT[mid] || mid : mid;
+  }
   function octaveBrackets(g, keys, lo, hi, y) {
     for (let o = Math.floor(lo / 12); o <= Math.floor(hi / 12); o++) {
       const whites = [];
@@ -811,10 +819,9 @@
       const x1 = whites[0].x + 3, x2 = whites[whites.length - 1].x + whites[whites.length - 1].w - 3;
       g.strokeStyle = "#b8b8ae"; g.lineWidth = 1.2;
       g.beginPath(); g.moveTo(x1, y - 5); g.lineTo(x1, y); g.lineTo(x2, y); g.lineTo(x2, y - 5); g.stroke();
-      const name = OCTAVE_NAMES[o - 1] || "";
       g.fillStyle = COLORS.muted; g.textAlign = "center";
       g.font = `${whites.length > 2 ? 11 : 9}px Segoe UI, Arial, sans-serif`;
-      g.fillText(whites.length > 2 ? name : name.replace(" октава", ""), (x1 + x2) / 2, y + 13);
+      g.fillText(octaveName(o, whites.length > 2 ? "full" : "mid"), (x1 + x2) / 2, y + 13);
     }
   }
 
@@ -1128,11 +1135,9 @@
         if (xb - xa < 8) return;
         g.strokeStyle = "#b8b8ae"; g.lineWidth = 1.2;
         g.beginPath(); g.moveTo(xa, y + 4); g.lineTo(xa, y); g.lineTo(xb, y); g.lineTo(xb, y + 4); g.stroke();
-        const name = (OCTAVE_NAMES[Number(key.slice(1)) - 1] || "").replace(" октава", "");
+        const o = Number(key.slice(1));
         g.fillStyle = COLORS.muted; g.font = "9px Segoe UI, Arial, sans-serif"; g.textAlign = "center";
-        const short = { "субконтроктава": "субк.", "контроктава": "контр.", "большая": "бол.", "малая": "мал.", "первая": "1-я",
-                        "вторая": "2-я", "третья": "3-я", "четвёртая": "4-я", "пятая": "5-я" }[name] || name;
-        g.fillText(xb - xa > 60 ? name : short, (xa + xb) / 2, y - 3);
+        g.fillText(octaveName(o, xb - xa > 60 ? "mid" : "short"), (xa + xb) / 2, y - 3);
       });
       if (Lhum > 3 && Lhum < 28) {
         const xb = edge + Lhum * cm;
@@ -1859,7 +1864,7 @@
       this.g = this.canvas.getContext("2d");
       const bar = document.createElement("div");
       bar.className = "player-controls";
-      bar.innerHTML = '<span class="player-mode"><button type="button" data-o="1" class="on">1-я октава</button><button type="button" data-o="2">2-я октава</button></span>' +
+      bar.innerHTML = '<span class="player-mode"><button type="button" data-o="1" class="on">малая октава</button><button type="button" data-o="2">первая октава</button></span>' +
         STRING_MARKS.map(([, name], i) => `<button type="button" data-mark="${i}"${i === 12 ? ' title="до следующей октавы"' : ""}>${i === 12 ? "до ↑" : name}</button>`).join("") +
         '<label>Натяжение <input type="range" min="50" max="200" step="5" value="100"> <span class="lab-ten">100</span> %</label>' +
         '<button type="button" class="player-play" data-scale="1">▶ Гамма по очереди</button>' +
@@ -2051,7 +2056,7 @@
         g.strokeStyle = "#cfcfc6"; g.lineWidth = 1;
         g.beginPath(); g.moveTo(x, y0 - 8); g.lineTo(x, y0 + 8); g.stroke();
       });
-      [[0, 0.5, "1-я октава: от всей струны до половины"], [0.5, 0.75, "2-я: до четверти"], [0.75, 0.875, "3-я"]].forEach(([a, b, label]) => {
+      [[0, 0.5, "малая октава: от всей струны до половины"], [0.5, 0.75, "первая: до четверти"], [0.75, 0.875, "вторая"]].forEach(([a, b, label]) => {
         const xa = x0 + len * a + 2, xb = x0 + len * b - 2, y = y0 + 106;
         g.strokeStyle = "#b8b8ae"; g.lineWidth = 1.2;
         g.beginPath(); g.moveTo(xa, y - 5); g.lineTo(xa, y); g.lineTo(xb, y); g.lineTo(xb, y - 5); g.stroke();
@@ -2275,7 +2280,7 @@
           const y = top + bh * (1 - L), isDo = m % 12 === 0;
           g.strokeStyle = isDo ? COLORS.right : "#9aa1ad"; g.lineWidth = isDo ? 2 : 1;
           g.beginPath(); g.moveTo(x + bw - (isDo ? 10 : 6), y); g.lineTo(x + bw + (isDo ? 8 : 5), y); g.stroke();
-          if (isDo) { g.fillStyle = COLORS.right; g.font = "bold 9px Segoe UI, Arial, sans-serif"; g.textAlign = "left"; g.fillText("до" + "₀₁₂₃₄₅₆₇₈"[Math.floor(m / 12) - 1], x + bw + 9, y + 3); }
+          if (isDo) { g.fillStyle = COLORS.right; g.font = "bold 9px Segoe UI, Arial, sans-serif"; g.textAlign = "left"; g.fillText("до", x + bw + 9, y + 3); }
         });
         g.strokeStyle = COLORS.right; g.lineWidth = 2;
         g.beginPath();
@@ -2290,9 +2295,9 @@
         g.fillText(`${Math.round(level * 100)} % воды`, x + bw / 2, top + bh + 33);
         g.fillStyle = COLORS.right; g.font = "bold 12px Segoe UI, Arial, sans-serif";
         g.fillText(nearestNote(f), x + bw / 2, top + bh + 50);
-        // the octave, so the last до is visibly the next one (C4 → C5)
+        // the octave, so the last до is visibly the next one
         g.fillStyle = COLORS.muted; g.font = "10px Segoe UI, Arial, sans-serif";
-        g.fillText(sciName(f), x + bw / 2, top + bh + 64);
+        g.fillText(octaveName(Math.floor(Math.round(69 + 12 * Math.log2(f / 440)) / 12), "mid"), x + bw / 2, top + bh + 64);
       });
     }
   }

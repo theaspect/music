@@ -1454,10 +1454,10 @@
   const DO4 = 261.63;
   // Pressed keys are filled blue (chords), or with `dots` marked by a dot (scales, where most keys are pressed and
   // a filled keyboard would read as one blue block).
-  function miniKeysSvg(pressed, width = 64, height = 18, dots = false) {
+  function miniKeysSvg(pressed, width = 64, height = 18, dots = false, tonic = 0) {
     const kw = width / 8, white = [0, 2, 4, 5, 7, 9, 11, 12], black = [[1, 0], [3, 1], [6, 3], [8, 4], [10, 5]];
     const fill = (m, idle) => (!dots && pressed.includes(m) ? COLORS.right : idle);
-    const dot = (m, x, y) => (dots && pressed.includes(m) ? `<circle cx="${x}" cy="${y}" r="${kw * 0.24}" fill="${m % 12 === 0 ? "#d64545" : "#2f72c9"}" stroke="#fff" stroke-width="0.6"/>` : "");
+    const dot = (m, x, y) => (dots && pressed.includes(m) ? `<circle cx="${x}" cy="${y}" r="${kw * 0.24}" fill="${m % 12 === tonic ? "#d64545" : "#2f72c9"}" stroke="#fff" stroke-width="0.6"/>` : "");
     return `<svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" style="display:block;margin:0 auto 2px" aria-hidden="true">` +
       white.map((m, i) => `<rect x="${i * kw}" y="0" width="${kw}" height="${height}" fill="${fill(m, "#fff")}" stroke="#b8b8ae" stroke-width="0.8"/>`).join("") +
       black.map(([m, after]) => `<rect x="${(after + 1) * kw - kw * 0.3}" y="0" width="${kw * 0.6}" height="${height * 0.6}" fill="${fill(m, "#8f8f86")}"/>`).join("") +
@@ -1965,7 +1965,7 @@
       const tonics = document.createElement("div");
       tonics.className = "player-controls";
       tonics.innerHTML = '<b>Тоника:</b><span class="player-mode">' +
-        NAMES.map((n, i) => `<button type="button" data-tonic="${i}"${i ? "" : ' class="on"'}>${isBlack(i) ? n + "/" + NAMES[i + 1] + "♭" : n}</button>`).join("") + "</span>";
+        NAMES.map((n, i) => `<button type="button" data-tonic="${i}"${i ? "" : ' class="on"'}></button>`).join("") + "</span>";
       const modes = document.createElement("div");
       modes.className = "player-controls";
       modes.innerHTML = '<b>Лад:</b><span class="player-mode">' +
@@ -1982,8 +1982,10 @@
         this.update();
         this.playScale();
       }));
+      this.tonicButtons = tonics.querySelectorAll("[data-tonic]");
       pick(tonics, "tonic", (i) => (this.tonic = i));
-      pick(modes, "mode", (i) => (this.mode = i));
+      pick(modes, "mode", (i) => { this.mode = i; this.renderTonics(); });
+      this.renderTonics();
       bar.querySelector(".player-play").addEventListener("click", () => { setActiveKeys(this); this.playScale(); });
       holdable(this.canvas, (x, y) => {
         const m = ChordLab.prototype.keyAt.call(this, x, y);
@@ -1994,6 +1996,16 @@
       this.resize();
       window.addEventListener("resize", () => this.resize());
       this.update();
+    }
+
+    // Every tonic button shows the chosen mode from that tonic, folded into one octave до … до.
+    renderTonics() {
+      const shape = modeFromDo(MODES[this.mode]).slice(0, 7);
+      this.tonicButtons.forEach((b, i) => {
+        const pcs = shape.map((x) => (x + i) % 12);
+        if (pcs.includes(0)) pcs.push(12);
+        b.innerHTML = miniKeysSvg(pcs, 56, 16, true, i) + (isBlack(i) ? NAMES[i] + "<br>" + NAMES[i + 1] + "♭" : NAMES[i]);
+      });
     }
 
     // MIDI notes of the scale from the tonic of the first octave up to the tonic an octave higher

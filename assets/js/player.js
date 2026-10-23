@@ -1691,6 +1691,9 @@
     [4 / 15, "си", "4/15 струны — си на октаву выше, чем при 8/15 струны", "4/15", 2],
     [1 / 4, "до", "четверть струны — две октавы выше", "1/4", 2]];
   const STRING_ALL = [...STRING_MARKS, ...STRING_MARKS_2];
+  // Semitones above the open string for every mark, to place it in equal temperament as well.
+  const STRING_SEMIS = [...STRING_MARKS.map((_, i) => i), ...STRING_MARKS_2.map((_, j) => 13 + j)];
+  const cents = (justShare, eqShare) => Math.round(1200 * Math.log2(justShare / eqShare));
   class StringLab {
     constructor(el) {
       this.el = el;
@@ -1706,16 +1709,27 @@
       bar.innerHTML = '<span class="player-mode"><button type="button" data-o="1" class="on">1-я октава</button><button type="button" data-o="2">2-я октава</button></span>' +
         STRING_MARKS.map(([, name], i) => `<button type="button" data-mark="${i}"${i === 12 ? ' title="до следующей октавы"' : ""}>${i === 12 ? "до ↑" : name}</button>`).join("") +
         '<label>Натяжение <input type="range" min="50" max="200" step="5" value="100"> <span class="lab-ten">100</span> %</label>' +
+        '<span class="player-mode"><button type="button" data-t="just" class="on">Чистый строй</button><button type="button" data-t="equal">Как на фортепиано</button></span>' +
         '<span class="player-score lab-info"></span>';
       el.append(this.canvas, bar);
       this.info = bar.querySelector(".lab-info");
+      // just intonation (simple ratios) or equal temperament (every semitone the same, 2^(1/12)), as on a piano
+      this.tuning = "just";
+      bar.querySelectorAll("[data-t]").forEach((b) => b.addEventListener("click", () => {
+        bar.querySelectorAll("[data-t]").forEach((x) => x.classList.toggle("on", x === b));
+        const mark = this.marks().find(([share]) => Math.abs(share - this.part) < 0.003);
+        const semis = mark ? mark[5] : null;
+        this.tuning = b.dataset.t;
+        if (semis !== null) this.part = this.marks().find((m) => m[5] === semis)[0]; // the finger follows its note
+        this.update();
+      }));
       this.octave = 1; // which octave the note buttons put the finger in
       bar.querySelectorAll("[data-o]").forEach((b) => b.addEventListener("click", () => {
         bar.querySelectorAll("[data-o]").forEach((x) => x.classList.toggle("on", x === b));
         this.octave = Number(b.dataset.o);
       }));
       bar.querySelectorAll("[data-mark]").forEach((b) => b.addEventListener("click", () => {
-        this.part = STRING_MARKS[b.dataset.mark][0] / this.octave;
+        this.part = this.marks()[Number(b.dataset.mark)][0] / this.octave;
         this.pluck();
       }));
       const ten = bar.querySelector("input");
@@ -1726,7 +1740,7 @@
       const posAt = (ev) => (ev.clientX - this.canvas.getBoundingClientRect().left - this.x0) / this.len;
       const setFinger = (pos) => {
         let part = Math.max(0.25, Math.min(1, 1 - pos));
-        const snap = STRING_ALL.find(([share]) => Math.abs(share - part) < (share < 0.5 ? 0.005 : 0.008));
+        const snap = this.marks().find(([share]) => Math.abs(share - part) < (share < 0.5 ? 0.005 : 0.008));
         if (snap) part = snap[0];
         this.part = part;
         this.update();
@@ -1759,6 +1773,18 @@
       window.addEventListener("resize", () => this.resize());
     }
     freq() { return (STRING_BASE * Math.sqrt(this.tension)) / this.part; }
+    // Marks in the current tuning: [share, name, description, label, octave, semitones, just share].
+    marks() {
+      return STRING_ALL.map((m, i) => {
+        const semis = STRING_SEMIS[i];
+        if (this.tuning === "just") return [m[0], m[1], m[2], m[3], m[4], semis, m[0]];
+        const eq = Math.pow(2, -semis / 12);
+        const c = cents(m[0], eq);
+        return [eq, m[1], `${eq.toFixed(3).replace(".", ",")} струны — как на фортепиано; в чистом строе ${m[3]}, ` +
+          (c === 0 ? "совпадает" : `разница ${Math.abs(c)} ${plural(Math.abs(c), "цент", "цента", "центов")} (на фортепиано ${c > 0 ? "выше" : "ниже"})`),
+          semis % 12 === 0 ? m[3] : eq.toFixed(3).replace(".", ","), m[4], semis, m[0]];
+      });
+    }
     resize() {
       const w = this.el.clientWidth, h = 222;
       const dpr = window.devicePixelRatio || 1;
@@ -1769,7 +1795,7 @@
     }
     update() {
       const f = this.freq();
-      const mark = STRING_ALL.find(([share]) => Math.abs(share - this.part) < 0.003);
+      const mark = this.marks().find(([share]) => Math.abs(share - this.part) < 0.003);
       const semis = 12 * Math.log2(1 / this.part);
       this.info.textContent = (mark ? `${mark[1]}: ${mark[2]}` : `${Math.round(this.part * 100)} % струны — на ${semis.toFixed(1).replace(".", ",")} полутона выше`) +
         `, ${Math.round(f)} Гц` +
@@ -1793,7 +1819,15 @@
       g.fillStyle = COLORS.bg; g.fillRect(0, 0, this.w, this.h);
       const fx = x0 + len * (1 - this.part);
       // marks for the simple ratios
-      STRING_ALL.forEach(([share, name, , frac, oct]) => {
+      // the other tuning as faint ticks, to see how far each note moves
+      this.marks().forEach(([share, , , , , , just]) => {
+        const other = this.tuning === "just" ? null : just;
+        if (other === null || Math.abs(other - share) < 1e-6) return;
+        const xo = x0 + len * (1 - other);
+        g.strokeStyle = "#e08a2b"; g.lineWidth = 1.5; g.globalAlpha = 0.6;
+        g.beginPath(); g.moveTo(xo, y0 - 8); g.lineTo(xo, y0 + 8); g.stroke(); g.globalAlpha = 1;
+      });
+      this.marks().forEach(([share, name, , frac, oct]) => {
         const x = x0 + len * (1 - share);
         const sharp = name.includes("♯"); // sharps above the string, like black keys; the rest below
         const labelY = sharp ? y0 - 40 : y0 + 44;

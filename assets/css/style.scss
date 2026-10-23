@@ -146,6 +146,20 @@ table img {
   padding: 4px 8px 3px;
 }
 
+.clip-play {
+  font: inherit;
+  font-size: 13px;
+  min-width: 26px;
+  height: 24px;
+  padding: 0 8px;
+  margin: 2px 0;
+  border: 1px solid #2f72c9;
+  border-radius: 4px;
+  background: #fff;
+  color: #2f72c9;
+  cursor: pointer;
+}
+
 // Paper gets the static diagrams and tables that sit next to every player; interactive parts and their hints are dropped.
 @media print {
   .player,

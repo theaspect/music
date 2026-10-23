@@ -3213,6 +3213,43 @@
   const FAMILIES = ["струнные", "духовые", "ударные", "клавишные"];
   const CLIP_SECONDS = 10;
 
+  // Recordings of CLIPS played right on the page: a ▶ button next to every link to one (the table in lesson 2 —
+  // the link stays for the author, the licence and paper), and `<p data-clips="гитара,скрипка">` in the lesson steps.
+  function clipButtons() {
+    const audio = new Audio();
+    audio.preload = "none";
+    let playing = null;
+    const idle = () => { if (playing) playing.textContent = playing.dataset.idle; playing = null; };
+    audio.addEventListener("ended", idle);
+    audio.addEventListener("pause", idle);
+    const button = (clip, label) => {
+      const btn = document.createElement("button");
+      btn.type = "button"; btn.className = "clip-play web-only"; btn.dataset.idle = "▶" + label; btn.textContent = btn.dataset.idle;
+      btn.setAttribute("aria-label", "Слушать: " + clip[0]);
+      btn.addEventListener("click", () => {
+        if (playing === btn) { audio.pause(); return; }
+        audio.pause();
+        audio.src = COMMONS + clip[2];
+        playing = btn; btn.textContent = "■" + label;
+        audio.play().catch(() => { btn.textContent = btn.dataset.idle; btn.title = "Запись не загрузилась: нужен интернет."; playing = null; });
+      });
+      return btn;
+    };
+    document.querySelectorAll('a[href^="https://commons.wikimedia.org/wiki/File:"]').forEach((a) => {
+      const file = decodeURIComponent(a.getAttribute("href").split("File:")[1]);
+      const clip = CLIPS.find((c) => decodeURIComponent(c[2].split("/")[2]) === file);
+      if (!clip || (a.previousElementSibling && a.previousElementSibling.classList.contains("clip-play"))) return;
+      a.before(button(clip, ""), " ");
+    });
+    document.querySelectorAll("[data-clips]").forEach((el) => {
+      if (el.children.length) return;
+      el.dataset.clips.split(",").forEach((name) => {
+        const clip = CLIPS.find((c) => c[0] === name.trim());
+        if (clip) el.append(button(clip, " " + clip[0]), " ");
+      });
+    });
+  }
+
   class ListenLab {
     constructor(el) {
       this.el = el;
@@ -3929,6 +3966,7 @@
     document.querySelectorAll(".lab[data-lab=chords]").forEach((el) => el._lab || (el._lab = new ChordLab(el)));
     document.querySelectorAll(".lab[data-lab=synth]").forEach((el) => el._lab || (el._lab = new SynthLab(el)));
     document.querySelectorAll(".lab[data-lab=listen]").forEach((el) => el._lab || (el._lab = new ListenLab(el)));
+    clipButtons();
     document.querySelectorAll(".lab[data-lab=clap]").forEach((el) => el._lab || (el._lab = new ClapLab(el)));
     document.querySelectorAll(".lab[data-lab=eartrain]").forEach((el) => el._lab || (el._lab = new EarTrainLab(el)));
     document.querySelectorAll(".lab[data-lab=keyboard]").forEach((el) => el._lab || (el._lab = new KeyboardLab(el)));

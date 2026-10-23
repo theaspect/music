@@ -887,7 +887,7 @@
   class RulerLab {
     constructor(el) {
       this.el = el;
-      howto(el, "Как играть: тяните линейку вправо или влево — меняется свисающий конец. Оттяните её вниз и отпустите — чем сильнее, тем больше размах и громче звук; щелчок — самый сильный.");
+      howto(el, "Как играть: тяните линейку вправо или влево — меняется свисающий конец; тяните вниз — оттягиваете его, можно одновременно. Отпустите — чем сильнее оттянули, тем больше размах и громче звук; щелчок — самый сильный.");
       this.free = 20; // cm hanging over the edge
       this.mat = RULER_MATERIALS.plastic;
       this.pluckedAt = null;
@@ -949,29 +949,25 @@
       this.canvas.addEventListener("pointermove", (ev) => {
         if (!press || ev.pointerId !== press.id) return;
         const dx = ev.clientX - press.x, dy = ev.clientY - press.y;
-        // the first clear move decides: down pulls the tip, sideways changes the length
-        if (!press.mode && dy > 4 && dy > Math.abs(dx)) press.mode = "pull";
-        else if (!press.mode && Math.abs(dx) > 4) press.mode = "slide";
-        if (press.mode === "pull") {
-          this.pull = Math.max(0, Math.min(this.maxAmp || 60, dy));
-          this.pluckedAt = null;
-          this.draw(0);
-          return;
-        }
-        if (press.mode !== "slide") return;
+        // both at once: sideways changes the length, down pulls the tip
+        if (!press.mode && Math.hypot(dx, dy) > 4) press.mode = "drag";
+        if (!press.mode) return;
+        this.pull = Math.max(0, Math.min(this.maxAmp || 60, dy));
+        this.pluckedAt = null;
         let free = Math.max(3, Math.min(28, press.free + dx / this.cm));
         const notes = rulerNotes(this.mat.K);
         const near = notes.length ? notes.reduce((a, b) => (Math.abs(b.cm - free) < Math.abs(a.cm - free) ? b : a)) : null;
         free = near && Math.abs(near.cm - free) < 0.3 ? near.cm : Math.round(free * 10) / 10; // snap to a note within 3 mm
-        if (free !== this.free) { this.free = free; this.pluckedAt = null; this.update(); }
+        if (free !== this.free) { this.free = free; this.update(); } else this.draw(0);
       });
       const end = (ev) => {
         if (!press || ev.pointerId !== press.id) return;
-        if (press.mode === "pull") {
-          const strength = this.pull / (this.maxAmp || 60);
+        if (press.mode) {
+          // a real pull (more than 8 px down) plucks with its strength; a sideways slide with a shaky hand does not
+          const strength = this.pull > 8 ? this.pull / (this.maxAmp || 60) : 0;
           this.pull = null;
-          if (strength > 0.05) this.pluck(strength); else this.draw(0);
-        } else if (!press.mode) this.pluck(1);
+          if (strength) this.pluck(strength); else this.draw(0);
+        } else this.pluck(1);
         press = null;
       };
       ["pointerup", "pointercancel"].forEach((e) => this.canvas.addEventListener(e, end));

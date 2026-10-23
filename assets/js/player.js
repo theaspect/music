@@ -3066,6 +3066,157 @@
     }
   }
 
+
+  // ---------- lesson 5: melody by ear ----------
+  // Everything is in до major around the first octave; the ear learns notes relative to the tonic, not absolute pitch.
+  const C_MAJOR = [60, 62, 64, 65, 67, 69, 71, 72]; // до … до
+  const DEGREE_NAMES = ["до", "ре", "ми", "фа", "соль", "ля", "си", "до"];
+  const pickOne = (a) => a[Math.floor(Math.random() * a.length)];
+  const EAR_LEVELS = [
+    { name: "1. Выше или ниже", answers: ["выше", "ниже"], text: "звучат две ноты: вторая выше или ниже первой?",
+      make() { const a = pickOne(C_MAJOR); let b; do b = pickOne(C_MAJOR); while (b === a); return { notes: [a, b], answer: b > a ? "выше" : "ниже" }; } },
+    { name: "2. Шаг или скачок", answers: ["шаг", "скачок"], text: "соседние ступени (шаг) или через одну и больше (скачок)?",
+      make() {
+        const i = Math.floor(Math.random() * 7), leap = Math.random() < 0.5;
+        const j = leap ? Math.min(7, i + 2 + Math.floor(Math.random() * 3)) : i + 1;
+        const [a, b] = Math.random() < 0.5 ? [i, j] : [j, i];
+        return { notes: [C_MAJOR[a], C_MAJOR[b]], answer: Math.abs(a - b) === 1 ? "шаг" : "скачок" };
+      } },
+    { name: "3. Вопрос или ответ", answers: ["вопрос", "ответ"], text: "фраза закончилась на тонике (ответ) или повисла (вопрос)?",
+      make() {
+        let i = pickOne([0, 2, 4]); const notes = [C_MAJOR[i]];
+        for (let k = 0; k < 3; k++) { i = Math.max(0, Math.min(6, i + pickOne([-1, 1, 1, -2, 2]))); notes.push(C_MAJOR[i]); }
+        const answer = Math.random() < 0.5 ? "ответ" : "вопрос";
+        notes.push(answer === "ответ" ? 60 : C_MAJOR[pickOne([1, 4, 6])]);
+        return { notes, answer, durations: [1, 1, 1, 1, 2] };
+      } },
+    { name: "4. Какая ступень", answers: ["до", "ре", "ми", "фа", "соль"], text: "после аккорда до–ми–соль звучит одна нота: какая?",
+      make() { const i = Math.floor(Math.random() * 5); return { chord: true, notes: [C_MAJOR[i]], answer: DEGREE_NAMES[i] }; } },
+    { name: "5. Подбери 3 ноты", keys: 3, text: "подберите мелодию на клавиатуре; первая нота — до",
+      make() { let i = 0; const notes = [60]; for (let k = 0; k < 2; k++) { i = Math.max(0, Math.min(4, i + pickOne([-1, 1, 2]))); notes.push(C_MAJOR[i]); } return { notes }; } },
+    { name: "6. Подбери 5 нот", keys: 5, text: "пять нот, первая — до; движения в основном шагами",
+      make() { let i = 0; const notes = [60]; for (let k = 0; k < 4; k++) { i = Math.max(0, Math.min(5, i + pickOne([-1, 1, 1, 2, -2]))); notes.push(C_MAJOR[i]); } return { notes }; } },
+  ];
+
+  class EarTrainLab {
+    constructor(el) {
+      this.el = el;
+      howto(el, "Как играть: выберите уровень и нажмите «Задание». Слушайте и отвечайте кнопками, а на уровнях 5–6 — на клавиатуре. «Ещё раз» повторяет задание. Переходите дальше, когда выходит 8 из 10.");
+      this.level = 0; this.task = null; this.input = [];
+      this.stats = EAR_LEVELS.map(() => []); // last answers per level, true / false
+      this.lo = 60; this.hi = 72; this.down = null;
+      const pick = document.createElement("div");
+      pick.className = "player-controls";
+      pick.innerHTML = '<span class="player-mode">' + EAR_LEVELS.map((l, i) => `<button type="button" data-lv="${i}"${i ? "" : ' class="on"'}>${l.name}</button>`).join("") + "</span>";
+      const bar = document.createElement("div");
+      bar.className = "player-controls";
+      bar.innerHTML = '<button type="button" class="player-play" data-a="new">▶ Задание</button><button type="button" data-a="again">▶ Ещё раз</button>' +
+        '<span class="ear-answers"></span><span class="player-score lab-info"></span>';
+      this.canvas = document.createElement("canvas");
+      this.g = this.canvas.getContext("2d");
+      el.append(pick, bar, this.canvas);
+      this.info = bar.querySelector(".lab-info");
+      this.answersBox = bar.querySelector(".ear-answers");
+      pick.querySelectorAll("[data-lv]").forEach((b) => b.addEventListener("click", () => {
+        pick.querySelectorAll("[data-lv]").forEach((x) => x.classList.toggle("on", x === b));
+        this.level = Number(b.dataset.lv); this.task = null; this.render();
+      }));
+      bar.querySelector("[data-a=new]").addEventListener("click", () => { this.task = EAR_LEVELS[this.level].make(); this.input = []; this.render(); this.play(); });
+      bar.querySelector("[data-a=again]").addEventListener("click", () => this.task && this.play());
+      holdable(this.canvas, (x, y) => {
+        const m = ChordLab.prototype.keyAt.call(this, x, y);
+        if (m === undefined) return;
+        this.down = m; this.draw();
+        const stop = holdNote(midiFreq(m));
+        this.typed(m);
+        return () => { stop(); this.down = null; this.draw(); };
+      });
+      this.resize();
+      window.addEventListener("resize", () => this.resize());
+      this.render();
+    }
+
+    play() {
+      audio();
+      const t0 = ctx.currentTime + 0.1, task = this.task, beat = 0.5;
+      let at = t0;
+      if (task.chord) { [60, 64, 67].forEach((m) => pianoNote(at, m, 1.2)); at += 1.8; }
+      task.notes.forEach((m, i) => { const d = (task.durations ? task.durations[i] : 1) * beat; pianoNote(at, m, d * 0.95); at += d; });
+    }
+
+    answer(a) {
+      if (!this.task || this.task.done) return;
+      this.score(a === this.task.answer, `Верно: ${this.task.answer}!`, `Нет, это «${this.task.answer}». Послушайте ещё раз.`);
+    }
+
+    typed(m) {
+      const lv = EAR_LEVELS[this.level];
+      if (!lv.keys || !this.task || this.task.done) return;
+      this.input.push(m);
+      if (this.input.length < lv.keys) { this.info.textContent = `нота ${this.input.length} из ${lv.keys}`; return; }
+      const ok = this.input.every((x, i) => x === this.task.notes[i]);
+      const names = (ns) => ns.map((x) => NAMES[x % 12]).join(" ");
+      this.score(ok, `Верно: ${names(this.task.notes)}!`, `Было ${names(this.task.notes)}, а вы сыграли ${names(this.input)}.`);
+    }
+
+    score(ok, yes, no) {
+      this.task.done = true;
+      const s = this.stats[this.level];
+      s.push(ok); if (s.length > 10) s.shift();
+      const right = s.filter(Boolean).length;
+      this.info.textContent = `${ok ? yes : no} Последние ${s.length}: верно ${right}.` + (s.length === 10 && right >= 8 && this.level < EAR_LEVELS.length - 1 ? " Можно на следующий уровень!" : "");
+      if (!ok) setTimeout(() => this.play(), 600);
+    }
+
+    render() {
+      const lv = EAR_LEVELS[this.level];
+      this.answersBox.innerHTML = "";
+      (lv.answers || []).forEach((a) => {
+        const b = document.createElement("button");
+        b.type = "button"; b.textContent = a;
+        b.addEventListener("click", () => this.answer(a));
+        this.answersBox.append(b);
+      });
+      this.canvas.style.display = lv.keys ? "block" : "none";
+      if (!this.task) this.info.textContent = lv.text[0].toUpperCase() + lv.text.slice(1) + (/[?!.]$/.test(lv.text) ? " " : ". ") + "Нажмите «Задание».";
+      this.draw();
+    }
+
+    resize() {
+      const w = this.el.clientWidth, h = Math.round(Math.min(170, w * 0.28));
+      const dpr = window.devicePixelRatio || 1;
+      this.canvas.width = w * dpr; this.canvas.height = h * dpr; this.canvas.style.height = h + "px";
+      this.g.setTransform(dpr, 0, 0, dpr, 0, 0);
+      this.w = w; this.h = h;
+      ChordLab.prototype.layout.call(this);
+      this.draw();
+    }
+
+    draw() {
+      const g = this.g, { top, keysH, kw } = this;
+      if (!this.keys) return;
+      g.fillStyle = COLORS.bg; g.fillRect(0, 0, this.w, this.h);
+      g.textAlign = "center";
+      const first = this.task && EAR_LEVELS[this.level].keys ? this.task.notes[0] : null;
+      for (let m = this.lo; m <= this.hi; m++) {
+        if (isBlack(m)) continue;
+        const k = this.keys[m];
+        g.fillStyle = m === this.down ? COLORS.flash : m === first ? "#e3eaf7" : "#fff";
+        roundRect(g, k.x + 1, top, k.w - 2, keysH, 6); g.fill();
+        g.strokeStyle = "#cfcfc6"; g.lineWidth = 1.5; g.stroke();
+        g.fillStyle = "#222"; g.font = `${m % 12 === 0 ? "bold " : ""}${Math.min(14, kw * 0.3)}px Segoe UI, Arial, sans-serif`;
+        g.fillText(NAMES[m % 12], k.x + k.w / 2, top + keysH - 10);
+        if (m === first) { g.fillStyle = COLORS.right; g.font = "11px Segoe UI, Arial, sans-serif"; g.fillText("первая нота", k.x + k.w / 2, top + keysH * 0.75); }
+      }
+      for (let m = this.lo; m <= this.hi; m++) {
+        if (!isBlack(m)) continue;
+        const k = this.keys[m];
+        g.fillStyle = m === this.down ? COLORS.flash : "#c5c5bc";
+        roundRect(g, k.x, top - 1, k.w, keysH * 0.62 + 1, 4); g.fill();
+      }
+    }
+  }
+
   // Keys and MIDI go to the player last started or touched.
   let activePlayer = null;
   document.addEventListener("keydown", (ev) => {
@@ -3124,6 +3275,7 @@
     document.querySelectorAll(".lab[data-lab=synth]").forEach((el) => el._lab || (el._lab = new SynthLab(el)));
     document.querySelectorAll(".lab[data-lab=listen]").forEach((el) => el._lab || (el._lab = new ListenLab(el)));
     document.querySelectorAll(".lab[data-lab=clap]").forEach((el) => el._lab || (el._lab = new ClapLab(el)));
+    document.querySelectorAll(".lab[data-lab=eartrain]").forEach((el) => el._lab || (el._lab = new EarTrainLab(el)));
     document.querySelectorAll(".lab[data-lab=keyboard]").forEach((el) => el._lab || (el._lab = new KeyboardLab(el)));
     document.querySelectorAll(".lab[data-lab=string]").forEach((el) => el._lab || (el._lab = new StringLab(el)));
     document.querySelectorAll(".lab[data-lab=bottles]").forEach((el) => el._lab || (el._lab = new BottleLab(el)));

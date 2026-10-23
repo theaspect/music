@@ -120,6 +120,21 @@ table img {
   border-top: 0;
 }
 
+.ear-answers {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.ear-answers button {
+  font: inherit;
+  padding: 4px 14px;
+  border: 1px solid #2f72c9;
+  border-radius: 6px;
+  background: #fff;
+  color: #2f72c9;
+  cursor: pointer;
+}
+
 // Paper gets the static diagrams and tables that sit next to every player; interactive parts and their hints are dropped.
 @media print {
   .player,

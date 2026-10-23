@@ -144,4 +144,4 @@ Circuit Tracks — это грувбокс размером с книгу. В н
 
 ---
 
-← [Глава 3. Ритм и метроном](03-ritm-i-metronom.md) · [Оглавление](README.md) · [Глава 5. Как устроена мелодия](05-kak-ustroena-melodiya.md) →
+← [Глава 3. Ритм и барабаны](03-ritm-i-metronom.md) · [Оглавление](README.md) · [Глава 5. Как устроена мелодия](05-kak-ustroena-melodiya.md) →

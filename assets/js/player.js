@@ -2565,6 +2565,122 @@
   });
   document.addEventListener("keyup", (ev) => { if (synthHeld[ev.code]) { synthHeld[ev.code](); delete synthHeld[ev.code]; } });
 
+
+  // ---------- lesson 2: tell instruments apart by ear (recordings from Wikimedia Commons) ----------
+  const COMMONS = "https://upload.wikimedia.org/wikipedia/commons/transcoded/";
+  // [instrument, family, MP3 transcode path, start second]; authors and licences are listed in the lesson's table
+  const CLIPS = [
+    ["гитара", "струнные", "e/e0/El_Noi_de_la_Mare_%28guitar%29.ogg/El_Noi_de_la_Mare_%28guitar%29.ogg.mp3", 0],
+    ["арфа", "струнные", "8/88/Glissando_Imprecision_for_2_Harps.ogg/Glissando_Imprecision_for_2_Harps.ogg.mp3", 0],
+    ["скрипка", "струнные", "8/80/Violin_fingered.ogg/Violin_fingered.ogg.mp3", 0],
+    ["флейта", "духовые", "e/ec/Bach_-_Partita_For_Solo_Flute_-_Modern_Flute_-_4._Bouree.ogg/Bach_-_Partita_For_Solo_Flute_-_Modern_Flute_-_4._Bouree.ogg.mp3", 0],
+    ["труба", "духовые", "3/38/Natural_trumpet_B-flat.ogg/Natural_trumpet_B-flat.ogg.mp3", 0],
+    ["фортепиано", "клавишные", "4/48/Piano-phrase.wav/Piano-phrase.wav.mp3", 0],
+    ["орган", "клавишные", "2/2c/Ye_Choirs_of_New_Jerusalem_Organ.oga/Ye_Choirs_of_New_Jerusalem_Organ.oga.mp3", 0],
+    ["аккордеон", "клавишные", "9/91/Accordion_registers.ogg/Accordion_registers.ogg.mp3", 0],
+    ["малый барабан", "ударные", "b/b2/Snare_drum_unmuffled.ogg/Snare_drum_unmuffled.ogg.mp3", 0],
+    ["ксилофон", "ударные", "b/bd/Xylophone_jingle.wav/Xylophone_jingle.wav.mp3", 0],
+  ];
+  const FAMILIES = ["струнные", "духовые", "ударные", "клавишные"];
+  const CLIP_SECONDS = 10;
+
+  class ListenLab {
+    constructor(el) {
+      this.el = el;
+      howto(el, "Как играть: «Угадайка» — нажмите «Следующая запись», послушайте и выберите семейство, затем инструмент. «Послушать все» — у каждого инструмента своя кнопка. Записи с Викисклада, нужен интернет.");
+      this.audio = new Audio();
+      this.audio.preload = "none";
+      this.audio.addEventListener("timeupdate", () => { if (this.audio.currentTime - this.start > CLIP_SECONDS) this.audio.pause(); });
+      this.score = { right: 0, total: 0 };
+      this.box = document.createElement("div");
+      this.box.className = "listen-box";
+      const bar = document.createElement("div");
+      bar.className = "player-controls";
+      bar.innerHTML = '<span class="player-mode"><button type="button" data-v="quiz" class="on">Угадайка</button><button type="button" data-v="all">Послушать все</button></span>' +
+        '<button type="button" data-a="stop">■ Стоп</button><span class="player-score lab-info"></span>';
+      el.append(this.box, bar);
+      this.info = bar.querySelector(".lab-info");
+      bar.querySelector("[data-a=stop]").addEventListener("click", () => this.audio.pause());
+      bar.querySelectorAll("[data-v]").forEach((b) => b.addEventListener("click", () => {
+        bar.querySelectorAll("[data-v]").forEach((x) => x.classList.toggle("on", x === b));
+        this.view = b.dataset.v; this.render();
+      }));
+      this.view = "quiz";
+      this.render();
+    }
+
+    play(clip) {
+      this.start = clip[3];
+      this.audio.src = COMMONS + clip[2];
+      this.audio.currentTime = clip[3];
+      this.audio.play().catch(() => { this.info.textContent = "Запись не загрузилась: нужен интернет."; });
+    }
+
+    render() {
+      const b = this.box;
+      b.innerHTML = "";
+      if (this.view === "all") {
+        FAMILIES.forEach((fam) => {
+          const row = document.createElement("div");
+          row.className = "player-controls";
+          row.innerHTML = `<b>${fam[0].toUpperCase() + fam.slice(1)}:</b>`;
+          CLIPS.filter((c) => c[1] === fam).forEach((c) => {
+            const btn = document.createElement("button");
+            btn.type = "button"; btn.textContent = "▶ " + c[0];
+            btn.addEventListener("click", () => { this.play(c); this.info.textContent = `Играет: ${c[0]} (${c[1]})`; });
+            row.append(btn);
+          });
+          b.append(row);
+        });
+        this.info.textContent = "Сравнивайте пары: гитара и скрипка, флейта и труба, фортепиано и орган, малый и ксилофон.";
+        return;
+      }
+      const row = document.createElement("div");
+      row.className = "player-controls";
+      const next = document.createElement("button");
+      next.type = "button"; next.className = "player-play"; next.textContent = this.current ? "▶ Ещё раз" : "▶ Следующая запись";
+      next.addEventListener("click", () => {
+        if (!this.current || this.answered) { this.current = CLIPS[Math.floor(Math.random() * CLIPS.length)]; this.answered = false; this.family = null; }
+        this.play(this.current);
+        this.render();
+      });
+      row.append(next);
+      if (this.current && this.answered) {
+        const again = document.createElement("button");
+        again.type = "button"; again.textContent = "▶ Следующая запись";
+        again.addEventListener("click", () => { this.current = CLIPS[Math.floor(Math.random() * CLIPS.length)]; this.answered = false; this.family = null; this.play(this.current); this.render(); });
+        row.append(again);
+      }
+      b.append(row);
+      if (!this.current) { this.info.textContent = "Нажмите «Следующая запись»."; return; }
+      const ask = (label, options, onPick) => {
+        const r = document.createElement("div");
+        r.className = "player-controls";
+        r.innerHTML = `<b>${label}</b>`;
+        options.forEach((o) => {
+          const btn = document.createElement("button");
+          btn.type = "button"; btn.textContent = o;
+          btn.addEventListener("click", () => onPick(o));
+          r.append(btn);
+        });
+        b.append(r);
+      };
+      if (!this.family) {
+        ask("Какое семейство?", FAMILIES, (f) => {
+          if (f !== this.current[1]) { this.info.textContent = `Нет, не ${f}. Послушайте ещё раз: что колеблется?`; return; }
+          this.family = f; this.info.textContent = `Верно, ${f}. А какой инструмент?`; this.render();
+        });
+      } else if (!this.answered) {
+        ask("Какой инструмент?", CLIPS.filter((c) => c[1] === this.family).map((c) => c[0]), (name) => {
+          this.score.total++;
+          if (name === this.current[0]) { this.score.right++; this.info.textContent = `Да, это ${name}! Счёт: ${this.score.right} из ${this.score.total}.`; }
+          else this.info.textContent = `Это был инструмент «${this.current[0]}». Счёт: ${this.score.right} из ${this.score.total}.`;
+          this.answered = true; this.render();
+        });
+      }
+    }
+  }
+
   // Keys and MIDI go to the player last started or touched.
   let activePlayer = null;
   document.addEventListener("keydown", (ev) => {
@@ -2621,6 +2737,7 @@
     document.querySelectorAll(".lab[data-lab=ear]").forEach((el) => el._lab || (el._lab = new EarLab(el)));
     document.querySelectorAll(".lab[data-lab=chords]").forEach((el) => el._lab || (el._lab = new ChordLab(el)));
     document.querySelectorAll(".lab[data-lab=synth]").forEach((el) => el._lab || (el._lab = new SynthLab(el)));
+    document.querySelectorAll(".lab[data-lab=listen]").forEach((el) => el._lab || (el._lab = new ListenLab(el)));
     document.querySelectorAll(".lab[data-lab=keyboard]").forEach((el) => el._lab || (el._lab = new KeyboardLab(el)));
     document.querySelectorAll(".lab[data-lab=string]").forEach((el) => el._lab || (el._lab = new StringLab(el)));
     document.querySelectorAll(".lab[data-lab=bottles]").forEach((el) => el._lab || (el._lab = new BottleLab(el)));

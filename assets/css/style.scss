@@ -113,6 +113,13 @@ table img {
   }
 }
 
+.listen-box {
+  padding: 4px 0;
+}
+.listen-box .player-controls {
+  border-top: 0;
+}
+
 // Paper gets the static diagrams and tables that sit next to every player; interactive parts and their hints are dropped.
 @media print {
   .player,

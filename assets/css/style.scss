@@ -135,6 +135,11 @@ table img {
   cursor: pointer;
 }
 
+.player-controls [data-preset] {
+  line-height: 1.2;
+  padding: 4px 8px 3px;
+}
+
 // Paper gets the static diagrams and tables that sit next to every player; interactive parts and their hints are dropped.
 @media print {
   .player,

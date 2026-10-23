@@ -1393,6 +1393,14 @@
     g.beginPath(); g.moveTo(x + 7 * kw, y - 2); g.lineTo(x + 7 * kw, y + h + 2); g.stroke();
   }
   const DO4 = 261.63;
+  function miniKeysSvg(pressed, width = 64, height = 18) {
+    const kw = width / 8, white = [0, 2, 4, 5, 7, 9, 11, 12], black = [[1, 0], [3, 1], [6, 3], [8, 4], [10, 5]];
+    const fill = (m, idle) => (pressed.includes(m) ? COLORS.right : idle);
+    return `<svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" style="display:block;margin:0 auto 2px" aria-hidden="true">` +
+      white.map((m, i) => `<rect x="${i * kw}" y="0" width="${kw}" height="${height}" fill="${fill(m, "#fff")}" stroke="#b8b8ae" stroke-width="0.8"/>`).join("") +
+      black.map(([m, after]) => `<rect x="${(after + 1) * kw - kw * 0.3}" y="0" width="${kw * 0.6}" height="${height * 0.6}" fill="${fill(m, "#8f8f86")}"/>`).join("") +
+      `<line x1="${7 * kw}" y1="0" x2="${7 * kw}" y2="${height}" stroke="${COLORS.right}" stroke-width="1.2"/></svg>`;
+  }
 
   class IntervalLab {
     constructor(el) {
@@ -1668,7 +1676,8 @@
         '<span class="player-score lab-info"></span>';
       const presets = document.createElement("div");
       presets.className = "player-controls";
-      presets.innerHTML = "<b>Готовые:</b>" + CHORD_PRESETS.map(([n], i) => `<button type="button" data-preset="${i}">${n}</button>`).join("");
+      presets.innerHTML = "<b>Готовые:</b>" + CHORD_PRESETS.map(([n, notes], i) =>
+        `<button type="button" data-preset="${i}">${miniKeysSvg(notes.map((m) => m - 60))}${n}</button>`).join("");
       el.append(this.canvas, bar, presets);
       this.info = bar.querySelector(".lab-info");
       holdButton(bar.querySelector("[data-act=together]"), () => this.hold());
@@ -3483,6 +3492,86 @@
     }
   }
 
+
+  // ---------- loudness ladder for the decibel table (1.3.1) ----------
+  // The real span from a whisper to the pain threshold is about 100 dB — far too much to play safely. Here every row
+  // is one 6 dB step louder than the one before, and the top step is the same quiet ceiling as the hearing lab (REF).
+  const DB_ROWS = [["шёпот", 30], ["обычный разговор", 60], ["оживлённая улица", 75], ["рок-концерт, клуб", 105], ["болевой порог", 125]];
+  function holdNoise(gain, freq) {
+    const t = ctx.currentTime, g = ctx.createGain(), s = ctx.createBufferSource(), f = ctx.createBiquadFilter();
+    s.buffer = noise; s.loop = true; f.type = "bandpass"; f.frequency.value = freq; f.Q.value = 0.8;
+    g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(gain, t + 0.05);
+    s.connect(f); f.connect(g); g.connect(ctx.destination); s.start(t);
+    return () => release(g, [s], 0.1);
+  }
+
+  class DbLadderLab {
+    constructor(el) {
+      this.el = el;
+      howto(el, "Как играть: держите кнопку строки — звучит шум, или нажмите «По очереди». Каждая строка здесь лишь на шаг громче предыдущей: настоящую разницу в 100 дБ играть опасно.");
+      this.lit = -1;
+      this.canvas = document.createElement("canvas");
+      this.g = this.canvas.getContext("2d");
+      const bar = document.createElement("div");
+      bar.className = "player-controls";
+      bar.innerHTML = DB_ROWS.map(([n], i) => `<button type="button" data-row="${i}">${n}</button>`).join("") +
+        '<button type="button" class="player-play" data-run="1">▶ По очереди</button><span class="player-score lab-info"></span>';
+      el.append(this.canvas, bar);
+      this.info = bar.querySelector(".lab-info");
+      bar.querySelectorAll("[data-row]").forEach((b) => holdButton(b, () => this.play(Number(b.dataset.row))));
+      bar.querySelector("[data-run]").addEventListener("click", () => {
+        audio();
+        clearTimeout(this.timer);
+        const step = (i) => {
+          if (i >= DB_ROWS.length) return;
+          const stop = this.play(i);
+          this.timer = setTimeout(() => { stop(); this.timer = setTimeout(() => step(i + 1), 250); }, 1000);
+        };
+        step(0);
+      });
+      this.resize();
+      window.addEventListener("resize", () => this.resize());
+      this.info.textContent = "Настоящая разница между шёпотом и болевым порогом — около 100 дБ, здесь она сжата до 24 дБ.";
+    }
+    stepDb(i) { return (i - (DB_ROWS.length - 1)) * 6; } // 0 dB for the top row, −6 for the next down …
+    play(i) {
+      audio();
+      this.lit = i; this.draw();
+      const stop = holdNoise(REF * 1.4 * Math.pow(10, this.stepDb(i) / 20), 1200);
+      const [name, db] = DB_ROWS[i];
+      this.info.textContent = `${name}: на самом деле около ${db} дБ; здесь — ступенька ${i + 1} из ${DB_ROWS.length}, ${this.stepDb(i) ? this.stepDb(i).toString().replace("-", "−") + " дБ от верхней" : "самая громкая из безопасных"}`;
+      return () => { stop(); this.lit = -1; this.draw(); };
+    }
+    resize() {
+      const w = this.el.clientWidth, h = 34 + DB_ROWS.length * 28;
+      const dpr = window.devicePixelRatio || 1;
+      this.canvas.width = w * dpr; this.canvas.height = h * dpr; this.canvas.style.height = h + "px";
+      this.g.setTransform(dpr, 0, 0, dpr, 0, 0);
+      this.w = w; this.h = h;
+      this.draw();
+    }
+    draw() {
+      const g = this.g, w = this.w, left = 150, half = (w - left - 30) / 2;
+      g.fillStyle = COLORS.bg; g.fillRect(0, 0, w, this.h);
+      g.fillStyle = COLORS.muted; g.font = "11px Segoe UI, Arial, sans-serif"; g.textAlign = "left";
+      g.fillText("на самом деле, дБ (0 … 130)", left, 16);
+      g.fillText("на этой лестнице: шаг 6 дБ", left + half + 20, 16);
+      DB_ROWS.forEach(([name, db], i) => {
+        const y = 26 + i * 28, on = i === this.lit;
+        g.fillStyle = COLORS.text; g.font = `${on ? "bold " : ""}12px Segoe UI, Arial, sans-serif`; g.textAlign = "right";
+        g.fillText(name, left - 10, y + 13);
+        g.fillStyle = "#e9e9e2"; roundRect(g, left, y, half, 18, 4); g.fill();
+        g.fillStyle = on ? COLORS.flash : "#9aa1ad"; roundRect(g, left, y, (half * db) / 130, 18, 4); g.fill();
+        const inside = db / 130 > 0.8; // a long bar takes its label inside, so it does not run into the next column
+        g.fillStyle = inside ? "#fff" : COLORS.text; g.font = "11px Segoe UI, Arial, sans-serif"; g.textAlign = inside ? "right" : "left";
+        g.fillText(`${db} дБ`, left + (half * db) / 130 + (inside ? -6 : 6), y + 13);
+        const x2 = left + half + 20, frac = (i + 1) / DB_ROWS.length;
+        g.fillStyle = "#e9e9e2"; roundRect(g, x2, y, half, 18, 4); g.fill();
+        g.fillStyle = on ? COLORS.flash : COLORS.right; roundRect(g, x2, y, half * frac, 18, 4); g.fill();
+      });
+    }
+  }
+
   // Keys and MIDI go to the player last started or touched.
   let activePlayer = null;
   document.addEventListener("keydown", (ev) => {
@@ -3537,6 +3626,7 @@
     document.querySelectorAll(".lab[data-lab=octaves]").forEach((el) => el._lab || (el._lab = new OctaveLab(el)));
     document.querySelectorAll(".lab[data-lab=intervals]").forEach((el) => el._lab || (el._lab = new IntervalLab(el)));
     document.querySelectorAll(".lab[data-lab=ear]").forEach((el) => el._lab || (el._lab = new EarLab(el)));
+    document.querySelectorAll(".lab[data-lab=dbladder]").forEach((el) => el._lab || (el._lab = new DbLadderLab(el)));
     document.querySelectorAll(".lab[data-lab=chords]").forEach((el) => el._lab || (el._lab = new ChordLab(el)));
     document.querySelectorAll(".lab[data-lab=synth]").forEach((el) => el._lab || (el._lab = new SynthLab(el)));
     document.querySelectorAll(".lab[data-lab=listen]").forEach((el) => el._lab || (el._lab = new ListenLab(el)));

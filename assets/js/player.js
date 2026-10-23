@@ -880,12 +880,12 @@
   class RulerLab {
     constructor(el) {
       this.el = el;
-      howto(el, "Как играть: тяните линейку вправо или влево — меняется свисающий конец. Щёлкните по линейке — она задрожит.");
+      howto(el, "Как играть: тяните линейку вправо или влево — меняется свисающий конец. Оттяните её вниз и отпустите — чем сильнее, тем больше размах и громче звук; щелчок — самый сильный.");
       this.free = 20; // cm hanging over the edge
       this.mat = RULER_MATERIALS.plastic;
       this.pluckedAt = null;
       this.canvas = document.createElement("canvas");
-      this.canvas.style.touchAction = "pan-y";
+      this.canvas.style.touchAction = "none"; // the ruler is dragged both ways: sideways for length, down to pull
       this.g = this.canvas.getContext("2d");
       const bar = document.createElement("div");
       bar.className = "player-controls";
@@ -925,15 +925,23 @@
       let press = null;
       this.canvas.addEventListener("pointerdown", (ev) => {
         if (press) return; // the ruler follows one finger; extra touches are ignored
-        press = { id: ev.pointerId, x: ev.clientX, free: this.free, moved: false };
+        press = { id: ev.pointerId, x: ev.clientX, y: ev.clientY, free: this.free, mode: null };
         this.canvas.setPointerCapture(ev.pointerId);
         ev.preventDefault();
       });
       this.canvas.addEventListener("pointermove", (ev) => {
         if (!press || ev.pointerId !== press.id) return;
-        const dx = ev.clientX - press.x;
-        if (!press.moved && Math.abs(dx) > 4) press.moved = true;
-        if (!press.moved) return;
+        const dx = ev.clientX - press.x, dy = ev.clientY - press.y;
+        // the first clear move decides: down pulls the tip, sideways changes the length
+        if (!press.mode && dy > 4 && dy > Math.abs(dx)) press.mode = "pull";
+        else if (!press.mode && Math.abs(dx) > 4) press.mode = "slide";
+        if (press.mode === "pull") {
+          this.pull = Math.max(0, Math.min(this.maxAmp || 60, dy));
+          this.pluckedAt = null;
+          this.draw(0);
+          return;
+        }
+        if (press.mode !== "slide") return;
         let free = Math.max(3, Math.min(28, press.free + dx / this.cm));
         const notes = rulerNotes(this.mat.K);
         const near = notes.length ? notes.reduce((a, b) => (Math.abs(b.cm - free) < Math.abs(a.cm - free) ? b : a)) : null;
@@ -942,7 +950,11 @@
       });
       const end = (ev) => {
         if (!press || ev.pointerId !== press.id) return;
-        if (!press.moved) this.pluck();
+        if (press.mode === "pull") {
+          const strength = this.pull / (this.maxAmp || 60);
+          this.pull = null;
+          if (strength > 0.05) this.pluck(strength); else this.draw(0);
+        } else if (!press.mode) this.pluck(1);
         press = null;
       };
       ["pointerup", "pointercancel"].forEach((e) => this.canvas.addEventListener(e, end));
@@ -985,18 +997,20 @@
       this.draw(0);
     }
 
-    pluck() {
+    // strength 0…1: how far the tip was pulled down; a click is the strongest
+    pluck(strength = 1) {
       audio();
+      this.strength = strength;
       const f = this.freq();
       const t = ctx.currentTime;
-      hiss(t, 0.03, 0.3, "bandpass", 2500); // the flick of a finger
+      hiss(t, 0.03, 0.3 * strength, "bandpass", 2500); // the flick of a finger, or the release
       if (f < 20) {
         // the slow swing itself is inaudible: what sounds is a slap on every swing and the pulsing second mode
         const tau = this.mat.tauLow, len = Math.min(5, tau * 2.2);
         for (let k = 1; k / f < len; k++) {
           const level = Math.exp(-k / f / tau);
           if (level < 0.05) break;
-          hiss(t + k / f, 0.025, 0.35 * level, "bandpass", 1200);
+          hiss(t + k / f, 0.025, 0.35 * level * strength, "bandpass", 1200);
         }
         const o = ctx.createOscillator(), g2 = ctx.createGain();
         o.type = "triangle";
@@ -1004,7 +1018,7 @@
         const curve = new Float32Array(300);
         for (let i = 0; i < curve.length; i++) {
           const s = (i / (curve.length - 1)) * len;
-          curve[i] = 0.25 * Math.exp(-s / tau) * Math.abs(Math.cos(2 * Math.PI * f * s));
+          curve[i] = 0.25 * strength * Math.exp(-s / tau) * Math.abs(Math.cos(2 * Math.PI * f * s));
         }
         g2.gain.setValueCurveAtTime(curve, t, len);
         o.connect(g2); g2.connect(ctx.destination);
@@ -1019,7 +1033,7 @@
         filter.type = "lowpass";
         filter.frequency.value = Math.min(8000, f * this.mat.bright);
         o.connect(filter);
-        filter.connect(envGain(t, 0.35, this.mat.ring));
+        filter.connect(envGain(t, Math.max(0.001, 0.35 * strength), this.mat.ring));
         o.start(t);
         o.stop(t + this.mat.ring + 0.1);
       }
@@ -1051,7 +1065,8 @@
       g.fillText("рука прижимает", Math.max(4, edge - 7 * cm) + 2.5 * cm, y0 - 24);
 
       const f = this.freq();
-      const amp = this.pluckedAt ? Math.exp(-age / (f < 20 ? this.mat.tauLow : this.mat.tauHigh)) * Math.min(h * 0.32, freeLen * 0.5) : 0;
+      this.maxAmp = Math.min(h * 0.32, freeLen * 0.5);
+      const amp = this.pluckedAt ? Math.exp(-age / (f < 20 ? this.mat.tauLow : this.mat.tauHigh)) * this.maxAmp * (this.strength ?? 1) : 0;
       const shape = (x) => { const s = x / freeLen; return (s * s * (3 - s)) / 2; }; // bent cantilever
       const ruler = (tip, alpha) => {
         g.globalAlpha = alpha;
@@ -1062,7 +1077,12 @@
         g.stroke();
         g.globalAlpha = 1;
       };
-      if (amp > 0.5 && f > 15) {
+      if (this.pull != null) {
+        // pulled down and held: the ruler bends after the finger, the size of the swing to come
+        ruler(this.pull, 1);
+        g.fillStyle = COLORS.right; g.font = "bold 12px Segoe UI, Arial, sans-serif"; g.textAlign = "center";
+        g.fillText(`отпустите — размах ${Math.round((this.pull / this.maxAmp) * 100)} %`, edge + freeLen, y0 + this.pull + 22);
+      } else if (amp > 0.5 && f > 15) {
         // too fast for the screen (and the eye): draw the blur between the extreme positions
         for (let i = -4; i <= 4; i++) ruler((amp * i) / 4, 0.12);
         ruler(0, 0.6);

@@ -32,17 +32,19 @@
     kk: { name: "Бочка", x: 525, y: 148, pedal: true },
   };
 
-  // Computer keys by KeyboardEvent.code. Drums follow the kit rows; piano is the usual A-row layout from the lowest до.
-  const DRUM_KEYS = { KeyQ: "cr", KeyW: "t1", KeyE: "rd", KeyA: "hh", KeyZ: "hp", KeyS: "sn", KeyD: "t2", Space: "kk", KeyF: "ft" };
+  // Drum keys by KeyboardEvent.code, following the hands of the score: the basic beat is two index fingers and a thumb —
+  // F малый (left hand), J хай-хэт (right hand), space бочка; the rest of the right-hand pads sit next to J (toms on the
+  // home row, cymbals and tom 1 on the row above), the hi-hat pedal is under the left hand.
+  const DRUM_KEYS = { KeyF: "sn", KeyJ: "hh", KeyK: "t2", KeyL: "ft", KeyU: "cr", KeyI: "t1", KeyO: "rd", Space: "kk", KeyC: "hp" };
   // Laptop keys for the piano-like keyboards: the home row a s d f + j k l ; gives до … до (fingers rest there in
   // both English and Russian layouts), the row above gives the black keys: w e = до♯ ре♯, y u i = фа♯ соль♯ ля♯.
   // Keys are matched by KeyboardEvent.code, so the layout does not matter for playing — only for the letters shown.
   const NOTE_KEYS = { KeyA: 0, KeyW: 1, KeyS: 2, KeyE: 3, KeyD: 4, KeyF: 5, KeyY: 6, KeyJ: 7, KeyU: 8, KeyK: 9, KeyI: 10, KeyL: 11, Semicolon: 12 };
   const KEY_LETTERS = {
     en: { KeyA: "A", KeyW: "W", KeyS: "S", KeyE: "E", KeyD: "D", KeyF: "F", KeyY: "Y", KeyJ: "J", KeyU: "U", KeyK: "K", KeyI: "I", KeyL: "L", Semicolon: ";",
-          KeyQ: "Q", KeyZ: "Z", Space: "␣" },
+          KeyO: "O", KeyC: "C", Space: "␣" },
     ru: { KeyA: "Ф", KeyW: "Ц", KeyS: "Ы", KeyD: "В", KeyE: "У", KeyF: "А", KeyY: "Н", KeyJ: "О", KeyU: "Г", KeyK: "Л", KeyI: "Ш", KeyL: "Д", Semicolon: "Ж",
-          KeyQ: "Й", KeyZ: "Я", Space: "␣" },
+          KeyO: "Щ", KeyC: "С", Space: "␣" },
   };
   let keyLayout = "en";
   // The keyboard (a lab or a player) the laptop keys play: the one touched last. Only it shows the key caps.
@@ -66,12 +68,14 @@
       const m = base + off, k = keys[m];
       if (!k) return;
       const s = Math.max(12, Math.min(18, k.w * 0.62)), x = k.x + k.w / 2 - s / 2;
-      const y = isBlack(m) ? top + 4 : top + keysH * 0.64 + 3;
-      g.fillStyle = "#fff"; g.strokeStyle = COLORS.right; g.lineWidth = 1.2;
-      roundRect(g, x, y, s, s, 3); g.fill(); g.stroke();
-      g.fillStyle = COLORS.right; g.font = `bold ${Math.round(s * 0.6)}px Segoe UI, Arial, sans-serif`; g.textAlign = "center";
-      g.fillText(KEY_LETTERS[keyLayout][code], x + s / 2, y + s * 0.72);
+      drawKeyCap(g, x, isBlack(m) ? top + 4 : top + keysH * 0.64 + 3, s, s, code);
     });
+  }
+  function drawKeyCap(g, x, y, w, h, code) {
+    g.fillStyle = "#fff"; g.strokeStyle = COLORS.right; g.lineWidth = 1.2;
+    roundRect(g, x, y, w, h, 3); g.fill(); g.stroke();
+    g.fillStyle = COLORS.right; g.font = `bold ${Math.round(h * 0.6)}px Segoe UI, Arial, sans-serif`; g.textAlign = "center";
+    g.fillText(KEY_LETTERS[keyLayout][code], x + w / 2, y + h * 0.72);
   }
 
   // General MIDI drum notes, which electronic kits send over USB.
@@ -710,10 +714,8 @@
       if (activeKeys !== this) return;
       const code = Object.keys(DRUM_KEYS).find((c) => DRUM_KEYS[c] === padKey);
       if (!code) return;
-      this.g.fillStyle = COLORS.muted;
-      this.g.font = `${Math.max(9, 11 * s)}px Segoe UI, Arial, sans-serif`;
-      this.g.textAlign = "center";
-      this.g.fillText(KEY_LETTERS[keyLayout][code], x, y);
+      const h = Math.max(13, 16 * s), w = code === "Space" ? h * 2 : h;
+      drawKeyCap(this.g, x - w / 2, y - h * 0.75, w, h, code);
     }
 
     drawPiano(cur) {

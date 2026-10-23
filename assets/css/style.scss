@@ -139,7 +139,8 @@ table img {
   cursor: pointer;
 }
 
-.player-controls [data-preset] {
+.player-controls [data-preset],
+.player-controls [data-mode] {
   line-height: 1.2;
   padding: 4px 8px 3px;
 }

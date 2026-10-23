@@ -1452,12 +1452,17 @@
     g.beginPath(); g.moveTo(x + 7 * kw, y - 2); g.lineTo(x + 7 * kw, y + h + 2); g.stroke();
   }
   const DO4 = 261.63;
-  function miniKeysSvg(pressed, width = 64, height = 18) {
+  // Pressed keys are filled blue (chords), or with `dots` marked by a dot (scales, where most keys are pressed and
+  // a filled keyboard would read as one blue block).
+  function miniKeysSvg(pressed, width = 64, height = 18, dots = false) {
     const kw = width / 8, white = [0, 2, 4, 5, 7, 9, 11, 12], black = [[1, 0], [3, 1], [6, 3], [8, 4], [10, 5]];
-    const fill = (m, idle) => (pressed.includes(m) ? COLORS.right : idle);
+    const fill = (m, idle) => (!dots && pressed.includes(m) ? COLORS.right : idle);
+    const dot = (m, x, y) => (dots && pressed.includes(m) ? `<circle cx="${x}" cy="${y}" r="${kw * 0.24}" fill="${m % 12 === 0 ? "#d64545" : "#2f72c9"}" stroke="#fff" stroke-width="0.6"/>` : "");
     return `<svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" style="display:block;margin:0 auto 2px" aria-hidden="true">` +
       white.map((m, i) => `<rect x="${i * kw}" y="0" width="${kw}" height="${height}" fill="${fill(m, "#fff")}" stroke="#b8b8ae" stroke-width="0.8"/>`).join("") +
       black.map(([m, after]) => `<rect x="${(after + 1) * kw - kw * 0.3}" y="0" width="${kw * 0.6}" height="${height * 0.6}" fill="${fill(m, "#8f8f86")}"/>`).join("") +
+      white.map((m, i) => dot(m, (i + 0.5) * kw, height * 0.8)).join("") +
+      black.map(([m, after]) => dot(m, (after + 1) * kw, height * 0.36)).join("") +
       `<line x1="${7 * kw}" y1="0" x2="${7 * kw}" y2="${height}" stroke="${COLORS.right}" stroke-width="1.2"/></svg>`;
   }
 
@@ -1926,6 +1931,12 @@
     { name: "Миксолидийский", short: "миксолидийский лад", shift: 4, white: "соль", mood: "мажор с низкой 7-й ступенью: рок, блюз, народные песни" },
     { name: "Локрийский", short: "локрийский лад", shift: 6, white: "си", mood: "трезвучие на тонике неустойчиво, точки не получается — встречается редко" },
   ];
+  // the mode built from до, as offsets 0…12 — for the mini keyboards on the mode buttons
+  function modeFromDo(mode) {
+    const out = [0];
+    MAJOR_STEPS.slice(mode.shift).concat(MAJOR_STEPS.slice(0, mode.shift)).forEach((s) => out.push(out[out.length - 1] + s));
+    return out;
+  }
   const STEP_LETTERS = ["до", "ре", "ми", "фа", "соль", "ля", "си"];
   const STEP_NATURAL = [0, 2, 4, 5, 7, 9, 11];
   const ACCIDENTALS = { "-2": "𝄫", "-1": "♭", 0: "", 1: "♯", 2: "𝄪" };
@@ -1958,7 +1969,7 @@
       const modes = document.createElement("div");
       modes.className = "player-controls";
       modes.innerHTML = '<b>Лад:</b><span class="player-mode">' +
-        MODES.map((m, i) => `<button type="button" data-mode="${i}"${i ? "" : ' class="on"'}>${m.name}</button>`).join("") + "</span>";
+        MODES.map((m, i) => `<button type="button" data-mode="${i}"${i ? "" : ' class="on"'}>${miniKeysSvg(modeFromDo(m), 64, 18, true)}${m.name}</button>`).join("") + "</span>";
       const bar = document.createElement("div");
       bar.className = "player-controls";
       bar.innerHTML = '<button type="button" class="player-play">▶ Гамма</button><span class="player-score lab-info"></span>';

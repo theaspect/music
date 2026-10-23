@@ -62,13 +62,14 @@
       if (activeKeys && activeKeys.redraw) activeKeys.redraw();
     }).catch(() => {});
   }
-  // Small key caps on the keys of an active keyboard: on black keys near their top, on white keys below the black ones.
+  // Small key caps on the keys of an active keyboard: on black keys near their top, on white keys in the gap between
+  // the black ones — the lower part of the keys belongs to each lab's own labels.
   function drawKeyCaps(g, keys, base, top, keysH) {
     Object.entries(NOTE_KEYS).forEach(([code, off]) => {
       const m = base + off, k = keys[m];
       if (!k) return;
-      const s = Math.max(12, Math.min(18, k.w * 0.62)), x = k.x + k.w / 2 - s / 2;
-      drawKeyCap(g, x, isBlack(m) ? top + 4 : top + keysH * 0.64 + 3, s, s, code);
+      const black = isBlack(m), s = Math.max(11, Math.min(16, k.w * (black ? 0.6 : 0.34))), x = k.x + k.w / 2 - s / 2;
+      drawKeyCap(g, x, black ? top + 4 : top + keysH * 0.62 - s - 4, s, s, code);
     });
   }
   function drawKeyCap(g, x, y, w, h, code) {
@@ -2871,9 +2872,9 @@
         ? "Как играть: нажимайте клавиши — звук держится, пока клавиша нажата, можно несколькими пальцами или клавишами компьютера. Тяните точки на графиках, выбирайте волну и готовые пресеты."
         : {
             osc: "Как играть: выберите форму волны и нажимайте клавиши. Слева — форма волны, справа — её обертоны.",
-            filter: "Как играть: нажимайте клавиши и тяните синюю точку: влево-вправо — частота среза, вверх-вниз — резонанс.",
-            env: "Как играть: тяните точки огибающей — атаку, спад с удержанием и затухание — и держите клавиши разное время.",
-            lfo: "Как играть: держите клавишу и тяните точку: влево-вправо — скорость покачивания, вверх-вниз — глубина. Цель — высота или фильтр.",
+            filter: "Как играть: нажимайте клавиши и тяните синюю точку: влево-вправо — частота среза, вверх-вниз — резонанс. Пока тянете, звучит последняя нота.",
+            env: "Как играть: тяните точки огибающей — атаку, спад, удержание (точка на ровном участке, только вверх-вниз) и затухание — и держите клавиши разное время.",
+            lfo: "Как играть: тяните точку — пока тянете, звучит последняя нота: влево-вправо — скорость покачивания, вверх-вниз — глубина. Цель — высота или фильтр.",
           }[this.stages[0]]);
       this.lo = 48; this.hi = 72; // до малой октавы … до второй
       this.voices = new Map(); // midi → voice
@@ -2914,7 +2915,10 @@
         if (!handle && m === undefined) return;
         ev.preventDefault();
         this.canvas.setPointerCapture(ev.pointerId);
-        presses.set(ev.pointerId, handle ? { handle } : { m, stop: this.noteOn(m) });
+        // With one mouse a key and a handle cannot be held together, so a sound handle (filter, LFO) plays the last
+        // note while it is dragged, unless a note already sounds.
+        const audition = handle && handle.audition && !this.voices.size ? this.noteOn(this.lastNote || 60) : null;
+        presses.set(ev.pointerId, handle ? { handle, stop: audition } : { m, stop: this.noteOn(m) });
       });
       this.canvas.addEventListener("pointermove", (ev) => {
         const press = presses.get(ev.pointerId);
@@ -2947,6 +2951,7 @@
         v.filter.frequency.setTargetAtTime(this.p.cutoff, now, 0.02);
         v.filter.Q.setTargetAtTime(this.p.q, now, 0.02);
         v.lfo.frequency.setTargetAtTime(this.p.lfoRate, now, 0.02);
+        if (now - v.t0 > this.p.a + this.p.d) v.amp.gain.setTargetAtTime(v.peak * this.p.s, now, 0.02); // a held note follows the sustain
         this.routeLfo(v);
       });
       this.describe();
@@ -2982,6 +2987,7 @@
       const osc = ctx.createOscillator(), filter = ctx.createBiquadFilter(), amp = ctx.createGain();
       const lfo = ctx.createOscillator(), lfoGain = ctx.createGain();
       osc.type = p.type; osc.frequency.value = midiFreq(m);
+      this.lastNote = m;
       filter.type = "lowpass"; filter.frequency.value = p.cutoff; filter.Q.value = p.q;
       lfo.frequency.value = p.lfoRate; lfo.connect(lfoGain);
       osc.connect(filter); filter.connect(amp); amp.connect(this.out);
@@ -2989,7 +2995,7 @@
       amp.gain.setValueAtTime(0, t);
       amp.gain.linearRampToValueAtTime(peak, t + p.a);
       amp.gain.linearRampToValueAtTime(peak * p.s, t + p.a + p.d);
-      const v = { osc, filter, amp, lfo, lfoGain };
+      const v = { osc, filter, amp, lfo, lfoGain, t0: t, peak };
       this.routeLfo(v);
       osc.start(t); lfo.start(t);
       if (this.voices.has(m)) this.voices.get(m).release();
@@ -3107,7 +3113,7 @@
         const f = fMin * Math.pow(fMax / fMin, Math.max(0, Math.min(1, (mx - x) / w)));
         const db = dbMin + ((bottom - my) / (h - 20)) * (dbMax - dbMin);
         this.set({ cutoff: f, q: Math.max(0, Math.min(20, db)) });
-      });
+      }, true);
     }
 
     draw_env(x, y, w, h) {
@@ -3142,6 +3148,7 @@
       this.handle(sx(p.a), sy(1), (mx) => this.set({ a: Math.max(0.005, Math.min(2, ((mx - x) / w) * span)) }));
       this.handle(sx(p.a + p.d), sy(p.s), (mx, my) => this.set({
         d: Math.max(0.02, Math.min(2, ((mx - x) / w) * span - p.a)), s: Math.max(0, Math.min(1, (y + h - 14 - my) / (h - 24))) }));
+      this.handle(sx(rStart), sy(p.s), (mx, my) => this.set({ s: Math.max(0, Math.min(1, (y + h - 14 - my) / (h - 24))) }), true);
       this.handle(sx(rStart + p.r), sy(0), (mx) => this.set({ r: Math.max(0.02, Math.min(2.5, ((mx - x) / w) * span - rStart)) }));
     }
 
@@ -3161,14 +3168,14 @@
       const qx = x + (0.25 / p.lfoRate / span) * w; // the first crest
       this.handle(qx, mid - amp * p.lfoDepth, (mx, my) => this.set({
         lfoRate: Math.max(0.2, Math.min(12, 0.25 / Math.max(0.01, ((mx - x) / w) * span))),
-        lfoDepth: Math.max(0, Math.min(1, (mid - my) / amp)) }));
+        lfoDepth: Math.max(0, Math.min(1, (mid - my) / amp)) }), true);
     }
 
-    handle(x, y, drag) {
+    handle(x, y, drag, audition = false) {
       const g = this.g;
       g.fillStyle = "#7eaee6"; g.strokeStyle = COLORS.right; g.lineWidth = 2;
       g.beginPath(); g.arc(x, y, 8, 0, Math.PI * 2); g.fill(); g.stroke();
-      this.handles.push({ x, y, drag });
+      this.handles.push({ x, y, drag, audition });
     }
 
     drawKeys() {

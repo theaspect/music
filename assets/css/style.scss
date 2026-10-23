@@ -42,12 +42,16 @@ table img {
 }
 .player-mode {
   display: inline-flex;
+  flex-wrap: wrap; // long groups (tonics, modes, exercises) wrap on a phone instead of scrolling the page
+  max-width: 100%;
+  background: #fff;
   border: 1px solid #2f72c9;
   border-radius: 6px;
   overflow: hidden;
 }
 .player-mode button {
   font: inherit;
+  white-space: nowrap;
   padding: 4px 10px;
   border: 0;
   background: #fff;

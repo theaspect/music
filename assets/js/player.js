@@ -873,6 +873,15 @@
     return d === 1 && dd !== 11 ? one : d >= 2 && d <= 4 && (dd < 12 || dd > 14) ? few : many;
   }
 
+  function wrapText(g, text, width) {
+    const lines = [];
+    text.split(" ").forEach((word) => {
+      const last = lines.length ? lines[lines.length - 1] + " " + word : word;
+      if (lines.length && g.measureText(last).width <= width) lines[lines.length - 1] = last;
+      else lines.push(word);
+    });
+    return lines;
+  }
   function roundRect(g, x, y, w, h, r) {
     g.beginPath();
     g.moveTo(x + r, y);
@@ -1901,6 +1910,175 @@
         roundRect(g, k.x, top - 1, k.w, keysH * 0.62 + 1, 4); g.fill();
       }
       octaveBrackets(g, this.keys, this.lo, this.hi, top + keysH + 32);
+      if (activeKeys === this) drawKeyCaps(g, this.keys, 60, top, keysH);
+    }
+  }
+
+  // ---------- modes (1.4): seven modes from any of the 12 tonics ----------
+  // Every mode is a rotation of the major steps; `white` is the note it starts from on white keys only.
+  const MAJOR_STEPS = [2, 2, 1, 2, 2, 2, 1];
+  const MODES = [
+    { name: "Мажор (ионийский)", short: "мажор", shift: 0, white: "до", mood: "светло и устойчиво" },
+    { name: "Минор (эолийский)", short: "минор", shift: 5, white: "ля", mood: "грустно, серьёзно" },
+    { name: "Дорийский", short: "дорийский лад", shift: 1, white: "ре", mood: "минор со светлой 6-й ступенью: задумчиво; фолк, джаз, фанк" },
+    { name: "Фригийский", short: "фригийский лад", shift: 2, white: "ми", mood: "минор с низкой 2-й ступенью: тёмно, «испанский» колорит, метал" },
+    { name: "Лидийский", short: "лидийский лад", shift: 3, white: "фа", mood: "мажор с высокой 4-й ступенью: сказочно, «парит»; музыка к фильмам" },
+    { name: "Миксолидийский", short: "миксолидийский лад", shift: 4, white: "соль", mood: "мажор с низкой 7-й ступенью: рок, блюз, народные песни" },
+    { name: "Локрийский", short: "локрийский лад", shift: 6, white: "си", mood: "трезвучие на тонике неустойчиво, точки не получается — встречается редко" },
+  ];
+  const STEP_LETTERS = ["до", "ре", "ми", "фа", "соль", "ля", "си"];
+  const STEP_NATURAL = [0, 2, 4, 5, 7, 9, 11];
+  const ACCIDENTALS = { "-2": "𝄫", "-1": "♭", 0: "", 1: "♯", 2: "𝄪" };
+
+  // Names of the scale with every letter used once (до♯ minor has ми, not фа♭); a black tonic takes whichever of its
+  // two names needs fewer accidentals.
+  function spellScale(pcs) {
+    const spell = (letter) => pcs.map((pc, i) => {
+      const l = (letter + i) % 7, d = ((pc - STEP_NATURAL[l] + 18) % 12) - 6;
+      return { name: STEP_LETTERS[l] + ACCIDENTALS[d], acc: Math.abs(d) };
+    });
+    const options = [0, 1, 2, 3, 4, 5, 6].filter((l) => Math.abs(((pcs[0] - STEP_NATURAL[l] + 18) % 12) - 6) <= 1).map(spell);
+    options.sort((a, b) => a.reduce((s, x) => s + x.acc, 0) - b.reduce((s, x) => s + x.acc, 0));
+    return options[0].map((x) => x.name);
+  }
+
+  class ModeLab {
+    constructor(el) {
+      this.el = el;
+      howto(el, "Как играть: выберите тонику и лад — подсвечиваются ноты лада, цифры — ступени, внизу — шаги (Т — тон, П — полутон). «Гамма» играет лад вверх и вниз; клавиши можно нажимать и самому.");
+      this.lo = 60; this.hi = 84;
+      this.tonic = 0; this.mode = 0; this.lit = null;
+      this.pressed = new Set();
+      this.canvas = document.createElement("canvas");
+      this.g = this.canvas.getContext("2d");
+      const tonics = document.createElement("div");
+      tonics.className = "player-controls";
+      tonics.innerHTML = '<b>Тоника:</b><span class="player-mode">' +
+        NAMES.map((n, i) => `<button type="button" data-tonic="${i}"${i ? "" : ' class="on"'}>${isBlack(i) ? n + "/" + NAMES[i + 1] + "♭" : n}</button>`).join("") + "</span>";
+      const modes = document.createElement("div");
+      modes.className = "player-controls";
+      modes.innerHTML = '<b>Лад:</b><span class="player-mode">' +
+        MODES.map((m, i) => `<button type="button" data-mode="${i}"${i ? "" : ' class="on"'}>${m.name}</button>`).join("") + "</span>";
+      const bar = document.createElement("div");
+      bar.className = "player-controls";
+      bar.innerHTML = '<button type="button" class="player-play">▶ Гамма</button><span class="player-score lab-info"></span>';
+      el.append(tonics, modes, this.canvas, bar);
+      this.info = bar.querySelector(".lab-info");
+      const pick = (box, attr, set) => box.querySelectorAll(`[data-${attr}]`).forEach((b) => b.addEventListener("click", () => {
+        box.querySelectorAll(`[data-${attr}]`).forEach((x) => x.classList.toggle("on", x === b));
+        set(Number(b.dataset[attr]));
+        setActiveKeys(this);
+        this.update();
+        this.playScale();
+      }));
+      pick(tonics, "tonic", (i) => (this.tonic = i));
+      pick(modes, "mode", (i) => (this.mode = i));
+      bar.querySelector(".player-play").addEventListener("click", () => { setActiveKeys(this); this.playScale(); });
+      holdable(this.canvas, (x, y) => {
+        const m = ChordLab.prototype.keyAt.call(this, x, y);
+        if (m === undefined) return;
+        setActiveKeys(this);
+        return this.press(m);
+      });
+      this.resize();
+      window.addEventListener("resize", () => this.resize());
+      this.update();
+    }
+
+    // MIDI notes of the scale from the tonic of the first octave up to the tonic an octave higher
+    notes() {
+      const steps = MAJOR_STEPS.slice(MODES[this.mode].shift).concat(MAJOR_STEPS.slice(0, MODES[this.mode].shift));
+      const out = [60 + this.tonic];
+      steps.forEach((s) => out.push(out[out.length - 1] + s));
+      return { out, steps };
+    }
+
+    update() {
+      const { out, steps } = this.notes(), mode = MODES[this.mode];
+      this.names = spellScale(out.slice(0, 7).map((m) => m % 12));
+      this.info.textContent = `${this.names[0]} ${mode.short}: ${steps.map((s) => (s === 2 ? "Т" : "П")).join(" ")} — ${this.names.join(", ")}. ` +
+        `${mode.mood[0].toUpperCase() + mode.mood.slice(1)}. На одних белых клавишах — от ${mode.white}.`;
+      this.draw();
+    }
+
+    playScale() {
+      audio();
+      clearTimeout(this.timer);
+      const { out } = this.notes(), run = out.concat(out.slice(0, -1).reverse()), beat = 0.32, t0 = ctx.currentTime + 0.05;
+      run.forEach((m, i) => pianoNote(t0 + i * beat, m, i === run.length - 1 ? 0.9 : beat * 1.1));
+      const step = (i) => {
+        this.lit = i < run.length ? run[i] : null;
+        this.draw();
+        if (i < run.length) this.timer = setTimeout(() => step(i + 1), beat * 1000);
+      };
+      step(0);
+    }
+
+    press(m) {
+      this.pressed.add(m); this.draw();
+      const stop = holdNote(midiFreq(m));
+      return () => { stop(); this.pressed.delete(m); this.draw(); };
+    }
+    keyDown(code) { const off = NOTE_KEYS[code]; if (off === undefined) return undefined; audio(); return this.press(60 + off); }
+    redraw() { this.draw(); }
+
+    resize() {
+      const w = this.el.clientWidth, h = Math.round(Math.min(210, w * 0.34)) + 24;
+      const dpr = window.devicePixelRatio || 1;
+      this.canvas.width = w * dpr; this.canvas.height = h * dpr; this.canvas.style.height = h + "px";
+      this.g.setTransform(dpr, 0, 0, dpr, 0, 0);
+      this.w = w; this.h = h;
+      ChordLab.prototype.layout.call(this);
+      this.keysH = this.h - 40;
+      this.draw();
+    }
+
+    draw() {
+      if (!this.names) return;
+      const g = this.g, { top, keysH, kw } = this, { out, steps } = this.notes();
+      const degree = {};
+      out.forEach((m, i) => (degree[m] = i % 7));
+      const fill = (m, idle) => (this.pressed.has(m) || m === this.lit ? COLORS.flash : degree[m] === 0 ? "#9cc0ee" : degree[m] !== undefined ? COLORS.pad : idle);
+      g.fillStyle = COLORS.bg; g.fillRect(0, 0, this.w, this.h);
+      g.textAlign = "center";
+      const label = (m, k, yNum, yName, size) => {
+        if (degree[m] === undefined) return;
+        g.fillStyle = COLORS.right; g.font = `bold ${size + 2}px Segoe UI, Arial, sans-serif`;
+        g.fillText(String(degree[m] + 1), k.x + k.w / 2, yNum);
+        g.fillStyle = "#222"; g.font = `${degree[m] === 0 ? "bold " : ""}${size}px Segoe UI, Arial, sans-serif`;
+        g.fillText(this.names[degree[m]], k.x + k.w / 2, yName);
+      };
+      for (let m = this.lo; m <= this.hi; m++) {
+        if (isBlack(m)) continue;
+        const k = this.keys[m];
+        g.fillStyle = fill(m, "#fff");
+        roundRect(g, k.x + 1, top, k.w - 2, keysH, 6); g.fill();
+        g.strokeStyle = "#cfcfc6"; g.lineWidth = 1.5; g.stroke();
+        label(m, k, top + keysH - 30, top + keysH - 10, Math.min(14, kw * 0.32));
+      }
+      for (let m = this.lo; m <= this.hi; m++) {
+        if (!isBlack(m)) continue;
+        const k = this.keys[m];
+        g.fillStyle = degree[m] !== undefined && !(this.pressed.has(m) || m === this.lit) ? (degree[m] === 0 ? "#3d6fb3" : "#7fa6d9") : fill(m, "#c5c5bc");
+        roundRect(g, k.x, top - 1, k.w, keysH * 0.62 + 1, 4); g.fill();
+        if (degree[m] !== undefined) {
+          const size = Math.min(12, kw * 0.27);
+          g.fillStyle = "#fff"; g.font = `bold ${size + 1}px Segoe UI, Arial, sans-serif`;
+          g.fillText(String(degree[m] + 1), k.x + k.w / 2, top + keysH * 0.62 - 22);
+          g.font = `${size}px Segoe UI, Arial, sans-serif`;
+          g.fillText(this.names[degree[m]], k.x + k.w / 2, top + keysH * 0.62 - 7);
+        }
+      }
+      // steps between neighbouring notes of the scale
+      g.font = `bold ${Math.min(13, kw * 0.32)}px Segoe UI, Arial, sans-serif`;
+      steps.forEach((s, i) => {
+        const a = this.keys[out[i]], b = this.keys[out[i + 1]];
+        const xa = a.x + a.w / 2, xb = b.x + b.w / 2, y = top + keysH + 10;
+        g.strokeStyle = s === 1 ? COLORS.left : COLORS.right; g.lineWidth = 1.5;
+        g.beginPath(); g.moveTo(xa + 3, y); g.lineTo(xb - 3, y); g.stroke();
+        g.fillStyle = s === 1 ? COLORS.left : COLORS.right;
+        g.fillText(s === 2 ? "Т" : "П", (xa + xb) / 2, y + 16);
+      });
       if (activeKeys === this) drawKeyCaps(g, this.keys, 60, top, keysH);
     }
   }
@@ -3350,7 +3528,7 @@
     }
 
     resize() {
-      const w = this.el.clientWidth, h = 210;
+      const w = this.el.clientWidth, h = w < 600 ? 250 : 224;
       const dpr = window.devicePixelRatio || 1;
       this.canvas.width = w * dpr; this.canvas.height = h * dpr; this.canvas.style.height = h + "px";
       this.g.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -3381,15 +3559,19 @@
       g.fillText(beatNow === null ? "доля" : beatNow < 0 ? `отсчёт ${4 + Math.floor(beatNow) + 1}` : `такт ${Math.floor(beatNow / 4) + 1}`, 60, h / 2 + 46);
       // timeline of two bars around now
       const x0 = 130, x1 = w - 16, span = 8;
+      g.font = "11px Segoe UI, Arial, sans-serif";
+      const legend = wrapText(g, "кружок — когда надо хлопнуть; точка — ваш хлопок: зелёный точно (±40 мс), оранжевый чуть мимо, красный мимо" +
+        (ex.hands ? ", фиолетовый — не той рукой" : "") + "; числа — мс", x1 - x0);
+      const bottom = h - 14 - 13 * legend.length;
       const from = this.running ? Math.max(-4, Math.floor(beatNow / 4) * 4 - (beatNow % 4 < 2 ? 4 : 0)) : 0;
       const bx = (beat) => x0 + ((beat - from) / span) * (x1 - x0);
       for (let b = from; b <= from + span; b++) {
         g.strokeStyle = b % 4 === 0 ? "#b5b5ac" : "#e4e4dc"; g.lineWidth = b % 4 === 0 ? 2 : 1;
-        g.beginPath(); g.moveTo(bx(b), 24); g.lineTo(bx(b), h - 30); g.stroke();
+        g.beginPath(); g.moveTo(bx(b), 24); g.lineTo(bx(b), bottom); g.stroke();
         if (b % 4 === 0) { g.fillStyle = COLORS.muted; g.font = "10px Segoe UI, Arial, sans-serif"; g.textAlign = "left"; g.fillText(b < 0 ? "отсчёт" : `такт ${b / 4 + 1}`, bx(b) + 3, 18); }
       }
       if (this.running && beatNow >= from && beatNow <= from + span) {
-        g.strokeStyle = COLORS.right; g.lineWidth = 2; g.beginPath(); g.moveTo(bx(beatNow), 24); g.lineTo(bx(beatNow), h - 30); g.stroke();
+        g.strokeStyle = COLORS.right; g.lineWidth = 2; g.beginPath(); g.moveTo(bx(beatNow), 24); g.lineTo(bx(beatNow), bottom); g.stroke();
       }
       const midY = h / 2 - 10;
       const res = this.running || this.expect ? this.judge() : [];
@@ -3414,8 +3596,7 @@
         g.fillStyle = COLORS.right; g.beginPath(); g.arc(x1 - (now - x.time) / 3 * (x1 - x0), midY, 5, 0, Math.PI * 2); g.fill();
       });
       g.fillStyle = COLORS.muted; g.font = "11px Segoe UI, Arial, sans-serif"; g.textAlign = "left";
-      g.fillText("кружок — когда надо хлопнуть; точка — ваш хлопок: зелёный точно (±40 мс), оранжевый чуть мимо, красный мимо" +
-        (ex.hands ? ", фиолетовый — не той рукой" : "") + "; числа — мс", 130, h - 10);
+      legend.forEach((line, i) => g.fillText(line, x0, h - 10 - 13 * (legend.length - 1 - i)));
     }
   }
 
@@ -3720,6 +3901,7 @@
     document.querySelectorAll(".lab[data-lab=octaves]").forEach((el) => el._lab || (el._lab = new OctaveLab(el)));
     document.querySelectorAll(".lab[data-lab=intervals]").forEach((el) => el._lab || (el._lab = new IntervalLab(el)));
     document.querySelectorAll(".lab[data-lab=ear]").forEach((el) => el._lab || (el._lab = new EarLab(el)));
+    document.querySelectorAll(".lab[data-lab=modes]").forEach((el) => el._lab || (el._lab = new ModeLab(el)));
     document.querySelectorAll(".lab[data-lab=dbladder]").forEach((el) => el._lab || (el._lab = new DbLadderLab(el)));
     document.querySelectorAll(".lab[data-lab=chords]").forEach((el) => el._lab || (el._lab = new ChordLab(el)));
     document.querySelectorAll(".lab[data-lab=synth]").forEach((el) => el._lab || (el._lab = new SynthLab(el)));

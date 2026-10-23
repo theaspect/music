@@ -1352,12 +1352,24 @@
       const bar = document.createElement("div");
       bar.className = "player-controls";
       bar.innerHTML = '<button type="button" class="player-play">▶ Сыграть</button><span class="player-score lab-info"></span>';
-      el.append(this.canvas, bar);
+      // beats close up: до and до a few hertz higher, as pure tones — the slow wobble that turns into roughness
+      const beats = document.createElement("div");
+      beats.className = "player-controls";
+      beats.innerHTML = "<b>Биения крупным планом:</b>" + [2, 6, 17].map((d) =>
+        `<button type="button" data-beat="${d}">до + до на ${d} Гц выше${d === 17 ? " (как малая секунда)" : ""}</button>`).join("");
+      el.append(this.canvas, bar, beats);
       this.info = bar.querySelector(".lab-info");
-      bar.querySelector("button").addEventListener("click", () => this.play());
+      bar.querySelector("button").addEventListener("click", () => { this.demo = null; this.play(); });
+      beats.querySelectorAll("[data-beat]").forEach((b) => holdButton(b, () => {
+        this.demo = Number(b.dataset.beat);
+        this.draw();
+        const stops = [holdSine(DO4, 0.15), holdSine(DO4 + this.demo, 0.15)];
+        return () => stops.forEach((s) => s());
+      }));
       holdable(this.canvas, (x, y) => {
         if (y > this.boxBottom) return;
         this.pick = Math.max(0, Math.min(6, Math.floor((x / this.w) * 7)));
+        this.demo = null;
         this.draw();
         const [, pn, q] = INTERVALS[this.pick];
         const stops = [holdNote(DO4), holdNote((DO4 * pn) / q)];
@@ -1368,7 +1380,7 @@
     }
 
     resize() {
-      const w = this.el.clientWidth, h = Math.round(Math.min(300, w * 0.5));
+      const w = this.el.clientWidth, h = Math.round(Math.min(400, w * 0.6));
       const dpr = window.devicePixelRatio || 1;
       this.canvas.width = w * dpr; this.canvas.height = h * dpr; this.canvas.style.height = h + "px";
       this.g.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -1404,28 +1416,55 @@
         g.fillStyle = COLORS.muted; g.fillText(ex, x + bw / 2, top + bh * 0.6);
         miniKeys(g, x + 6, top + bh * 0.68, bw - 12, bh * 0.24, [0, semis]);
       });
-      // three waves over `q` periods of the lower note (at least two), so the meeting point is always on screen
+      // Top: each note over q periods of the lower one, with a line at the start of every period of each: where a
+      // grey (lower) and a dashed blue (upper) line coincide, the waves start together again — marked green.
       const [name, pn, q] = INTERVALS[this.pick];
-      const periods = Math.max(2, q);
-      const rows = [["нижняя нота", [1]], ["верхняя нота", [pn / q]], ["вместе", [1, pn / q]]];
-      const rowH = (h - top - bh - 14) / 3;
-      rows.forEach(([label, ratios], r) => {
-        const mid = top + bh + 10 + rowH * (r + 0.5), amp = rowH * (r === 2 ? 0.42 : 0.3);
-        g.fillStyle = COLORS.muted; g.font = "11px Segoe UI, Arial, sans-serif"; g.textAlign = "left";
-        g.fillText(label, 8, mid - rowH * 0.38);
-        g.strokeStyle = r === 2 ? (this.pick < 5 ? "#2a9d4b" : COLORS.bad) : COLORS.right;
-        g.lineWidth = periods > 8 ? 1 : 1.6;
-        g.beginPath();
-        for (let x = 0; x <= w - 16; x += 0.5) {
-          const ph = (2 * Math.PI * periods * x) / (w - 16);
-          const y = ratios.reduce((s, k) => s + Math.sin(ph * k), 0) / ratios.length;
-          if (x === 0) g.moveTo(8 + x, mid - amp * y); else g.lineTo(8 + x, mid - amp * y);
-        }
+      const f1 = DO4, f2 = this.demo ? DO4 + this.demo : (DO4 * pn) / q;
+      const x0 = 8, len = w - 16, rowsTop = top + bh + 10, shortH = (h - rowsTop) * 0.44;
+      const periods = this.demo ? 4 : Math.max(2, q), ratio = f2 / f1;
+      const xAt = (per) => x0 + (per / periods) * len; // per: periods of the lower note
+      for (let k = 0; k <= periods; k++) {
+        const meet = !this.demo && Math.abs(k * ratio - Math.round(k * ratio)) < 1e-6;
+        g.strokeStyle = meet ? "#2a9d4b" : "#c9c9c0"; g.lineWidth = meet ? 2.5 : 1;
+        g.beginPath(); g.moveTo(xAt(k), rowsTop); g.lineTo(xAt(k), rowsTop + shortH); g.stroke();
+      }
+      for (let k = 0; k <= periods * ratio + 1e-9; k++) {
+        g.strokeStyle = "#7eaee6"; g.lineWidth = 1; g.setLineDash([3, 3]);
+        g.beginPath(); g.moveTo(xAt(k / ratio), rowsTop + shortH / 2); g.lineTo(xAt(k / ratio), rowsTop + shortH); g.stroke(); g.setLineDash([]);
+      }
+      [[1, rowsTop + shortH * 0.25, "нижняя нота — серые линии"], [ratio, rowsTop + shortH * 0.75, "верхняя нота — синие пунктирные"]].forEach(([k, mid, label]) => {
+        g.fillStyle = COLORS.muted; g.font = "10px Segoe UI, Arial, sans-serif"; g.textAlign = "left";
+        g.fillText(label, x0 + 2, mid - shortH * 0.16);
+        g.strokeStyle = COLORS.right; g.lineWidth = periods > 8 ? 1 : 1.6; g.beginPath();
+        for (let x = 0; x <= len; x += 0.5) g.lineTo(x0 + x, mid - shortH * 0.17 * Math.sin(2 * Math.PI * k * periods * x / len));
         g.stroke();
       });
-      this.info.textContent = this.pick < 5
-        ? `${name}: волны сходятся каждые ${q} ${plural(q, "колебание", "колебания", "колебаний")} нижней ноты — звуки сливаются`
-        : `${name}: волны сходятся лишь раз в ${q} колебаний нижней ноты — между встречами они то складываются, то гасят друг друга, слышно дрожание`;
+      // Bottom: the sum over real time with its loudness (the envelope): it wobbles when the notes beat.
+      const span = this.demo ? 1 : 0.2, by = rowsTop + shortH + 22, bh2 = h - by - 6, mid = by + bh2 / 2;
+      g.fillStyle = COLORS.muted; g.font = "10px Segoe UI, Arial, sans-serif"; g.textAlign = "left";
+      g.fillText(`вместе за ${span === 1 ? "1 секунду" : "0,2 секунды"}: серое — сумма волн, цветное — её громкость`, x0 + 2, by - 6);
+      const N = Math.round(len * 4), dt = span / N, s = new Float32Array(N);
+      for (let i = 0; i < N; i++) s[i] = (Math.sin(2 * Math.PI * f1 * i * dt) + Math.sin(2 * Math.PI * f2 * i * dt)) / 2;
+      g.strokeStyle = "#c9c9c0"; g.lineWidth = 0.6; g.beginPath();
+      for (let i = 0; i < N; i++) g.lineTo(x0 + (i / N) * len, mid - (bh2 / 2 - 4) * s[i]);
+      g.stroke();
+      const win = Math.max(2, Math.round(1 / f1 / dt)), env = new Float32Array(N);
+      for (let i = 0; i < N; i++) { let m = 0; for (let j = Math.max(0, i - win); j < Math.min(N, i + win); j++) m = Math.max(m, Math.abs(s[j])); env[i] = m; }
+      g.strokeStyle = this.demo || this.pick >= 5 ? COLORS.bad : "#2a9d4b"; g.lineWidth = 2.5;
+      [1, -1].forEach((sign) => {
+        g.beginPath();
+        for (let i = 0; i < N; i += 2) g.lineTo(x0 + (i / N) * len, mid - sign * (bh2 / 2 - 4) * env[i]);
+        g.stroke();
+      });
+      const diff = Math.round(f2 - f1);
+      if (this.demo) {
+        this.info.textContent = `до и до на ${this.demo} Гц выше: громкость пульсирует ${this.demo} ${plural(this.demo, "раз", "раза", "раз")} в секунду — это биения` +
+          (this.demo >= 15 ? ". Так быстро, что пульсаций по отдельности не разобрать — слышна шероховатость, как у малой секунды" : ", их хорошо слышно как «вау-вау»");
+      } else {
+        this.info.textContent = this.pick < 5
+          ? `${name}: ${Math.round(f1)} и ${Math.round(f2)} Гц. Волны снова начинаются вместе каждые ${q} ${plural(q, "колебание", "колебания", "колебаний")} нижней ноты (зелёные линии), громкость суммы ровная — биений нет, звуки сливаются`
+          : `${name}: ${Math.round(f1)} и ${Math.round(f2)} Гц, разница ${diff} Гц. Волны сходятся лишь раз в ${q} колебаний нижней ноты, громкость суммы качается ${diff} раз в секунду (красная линия) — это биения, на слух шероховатость. Медленные биения — кнопками ниже`;
+      }
     }
   }
 

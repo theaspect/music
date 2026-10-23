@@ -1536,15 +1536,31 @@
       const loud = document.createElement("div");
       loud.className = "player-controls";
       loud.innerHTML = "<b>Громкость:</b>" + LEVELS.map((d) => `<button type="button" data-db="${d}">${d === 0 ? "0" : "−" + -d} дБ</button>`).join("") +
-        '<button type="button" data-two="1">1 инструмент → 2</button>';
+        '<button type="button" data-two="1">1 инструмент → 2</button><button type="button" class="player-play" data-run="loud">▶ По очереди</button>';
       const high = document.createElement("div");
       high.className = "player-controls";
       high.innerHTML = "<b>Предел слуха:</b>" + HEARING.map((f) => `<button type="button" data-hz="${f}">${f >= 1000 ? f / 1000 + " кГц" : f + " Гц"}</button>`).join("") +
+        '<button type="button" class="player-play" data-run="high">▶ По очереди</button>' +
         '<span class="player-score lab-info"></span>';
       el.append(this.canvas, loud, high);
       this.info = high.querySelector(".lab-info");
       loud.querySelectorAll("[data-db]").forEach((b) => holdButton(b, () => this.level(Number(b.dataset.db))));
       loud.querySelector("[data-two]").addEventListener("click", () => this.two());
+      // a whole row in turn: each level for a second, each pitch for a second and a half, with a short gap
+      const run = (items, play, each) => {
+        audio();
+        clearTimeout(this.runTimer);
+        if (this.runStop) this.runStop();
+        const step = (i) => {
+          if (i >= items.length) { this.runStop = null; return; }
+          const stop = play(items[i]);
+          this.runStop = stop;
+          this.runTimer = setTimeout(() => { stop(); this.runTimer = setTimeout(() => step(i + 1), 250); }, each);
+        };
+        step(0);
+      };
+      loud.querySelector("[data-run=loud]").addEventListener("click", () => run(LEVELS, (d) => this.level(d), 1000));
+      high.querySelector("[data-run=high]").addEventListener("click", () => run(HEARING, (f) => this.hear(f), 1500));
       high.querySelectorAll("[data-hz]").forEach((b) => holdButton(b, () => this.hear(Number(b.dataset.hz))));
       this.resize();
       window.addEventListener("resize", () => this.resize());

@@ -212,12 +212,12 @@
     o.start(t); s.start(t);
     return () => release(g, [o, s], 0.15);
   }
-  function holdSing(volume) {
+  function holdSing(volume, pitch = 220) {
     const t = ctx.currentTime, g = ctx.createGain();
     g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(0.3 * volume, t + 0.1);
     g.connect(ctx.destination);
     const o = ctx.createOscillator(), lfo = ctx.createOscillator(), lg = ctx.createGain(), f = ctx.createBiquadFilter();
-    o.type = "sawtooth"; o.frequency.value = 220; lfo.frequency.value = 5; lg.gain.value = 3;
+    o.type = "sawtooth"; o.frequency.value = pitch; lfo.frequency.value = 5; lg.gain.value = pitch / 70;
     lfo.connect(lg); lg.connect(o.frequency);
     f.type = "bandpass"; f.frequency.value = 800; f.Q.value = 1.5; // a rough "а" vowel
     o.connect(f); f.connect(g); o.start(t); lfo.start(t);
@@ -1911,7 +1911,7 @@
       const presses = new Map(); // pointerId → press: one finger can hold the finger-dot while another plucks
       const posAt = (ev) => (ev.clientX - this.canvas.getBoundingClientRect().left - this.x0) / this.len;
       const setFinger = (pos) => {
-        let part = Math.max(0.125, Math.min(1, 1 - pos));
+        let part = Math.max(1 / 64, Math.min(1, 1 - pos));
         const snap = this.marks().find(([share]) => Math.abs(share - part) < (share < 0.5 ? 0.005 : 0.008));
         if (snap) part = snap[0];
         this.part = part;
@@ -2050,19 +2050,27 @@
         g.fillText(frac, x + (share === 1 ? 10 : 0), sharp ? labelY - 12 : labelY + 13);
       });
       // the two octaves of marks, as brackets under the labels
-      // the third octave, 1/4 … 1/8: only ticks — enough to see that every octave is half as long as the previous one
-      STRING_MARKS.slice(1).forEach(([share]) => {
-        const x = x0 + len * (1 - share / 4);
-        g.strokeStyle = "#cfcfc6"; g.lineWidth = 1;
-        g.beginPath(); g.moveTo(x, y0 - 8); g.lineTo(x, y0 + 8); g.stroke();
-      });
-      [[0, 0.5, "малая октава: от всей струны до половины"], [0.5, 0.75, "первая: до четверти"], [0.75, 0.875, "вторая"]].forEach(([a, b, label]) => {
-        const xa = x0 + len * a + 2, xb = x0 + len * b - 2, y = y0 + 106;
+      // Octaves of the string: the open string is до of the small octave (o = 4), each next octave is half as long.
+      // Beyond the labelled second octave only ticks are drawn, while they stay at least 3 px apart, and a bracket is
+      // labelled while its name fits (full, then mid, then short form).
+      g.font = "11px Segoe UI, Arial, sans-serif";
+      for (let k = 0; ; k++) {
+        const a = 1 - Math.pow(2, -k), b = 1 - Math.pow(2, -k - 1);
+        const xa = x0 + len * a + 2, xb = x0 + len * b - 2, width = xb - xa, y = y0 + 106, o = 4 + k;
+        if (width < 10) break;
+        if (k >= 2 && (len * Math.pow(2, -k - 1)) / 12 >= 3) {
+          STRING_MARKS.slice(1).forEach(([share]) => {
+            const x = x0 + len * (1 - share * Math.pow(2, -k));
+            g.strokeStyle = "#cfcfc6"; g.lineWidth = 1;
+            g.beginPath(); g.moveTo(x, y0 - 8); g.lineTo(x, y0 + 8); g.stroke();
+          });
+        }
         g.strokeStyle = "#b8b8ae"; g.lineWidth = 1.2;
         g.beginPath(); g.moveTo(xa, y - 5); g.lineTo(xa, y); g.lineTo(xb, y); g.lineTo(xb, y - 5); g.stroke();
-        g.fillStyle = COLORS.muted; g.font = "11px Segoe UI, Arial, sans-serif"; g.textAlign = "center";
-        g.fillText(label, (xa + xb) / 2, y + 14);
-      });
+        const long = k === 0 ? "малая октава: от всей струны до половины" : k === 1 ? "первая октава: от половины до четверти" : octaveName(o, "full");
+        const label = [long, octaveName(o, "full"), octaveName(o, "mid"), octaveName(o, "short")].find((s) => g.measureText(s).width + 6 <= width);
+        if (label) { g.fillStyle = COLORS.muted; g.textAlign = "center"; g.fillText(label, (xa + xb) / 2, y + 14); }
+      }
       // pegs, the silent part and the vibrating part
       g.fillStyle = "#555"; g.fillRect(x0 - 8, y0 - 12, 8, 24); g.fillRect(x0 + len, y0 - 12, 8, 24);
       g.strokeStyle = "#c9c9c0"; g.lineWidth = 3;
@@ -2302,31 +2310,57 @@
     }
   }
 
-  // ---------- pot and film (1.1.1): sound travels through the air and makes grains jump ----------
+  // ---------- pot and film (1.1.1): sound reaches a film stretched over a bowl and makes the grains jump ----------
+  // A round membrane vibrates in rings: the axisymmetric modes J0(j₀ₙ·r/R) with j₀ₙ = 2.405, 5.520, 8.654, 11.79, so their
+  // frequencies go 1 : 2.30 : 3.60 : 4.90 and all scale as 1/R. The film's fundamental for a 20 cm bowl is set near 95 Hz
+  // (wave speed ≈ 25 m/s, a plausible guess for cling film, not a measurement). A grain leaves the film where its
+  // acceleration exceeds g; then it flies under real gravity at the bowl's scale and lands with a tick. On nodal rings the
+  // film stays still: grains do not jump there and slowly gather — Chladni's figures.
+  const J0_ZEROS = [2.4048, 5.5201, 8.6537, 11.7915];
+  const FILM_WAVE = 24.8; // m/s
+  function besselJ0(x) {
+    let sum = 0, term = 1;
+    for (let k = 0; k < 40; k++) {
+      if (k) term *= -(x * x) / (4 * k * k);
+      sum += term;
+      if (Math.abs(term) < 1e-12) break;
+    }
+    return sum;
+  }
+  const FILM_AMP = 0.0006; // m: the film's swing at full volume, on resonance — a fraction of a millimetre
+  const SING_PITCHES = [["низко", 110], ["средне", 220], ["высоко", 440]];
+
   class PotLab {
     constructor(el) {
       this.el = el;
-      howto(el, "Как играть: щёлкните по кастрюле или нажмите «Стукнуть»; «Спеть» звучит, пока держите. Волна показана замедленно: на самом деле звук летит тысячные доли секунды.");
-      this.db = -6; // relative to the loudest level of the experiment
-      this.volume = Math.pow(10, this.db / 20);
-      this.meter = 0; // amplitude shown by the level meter, falls back after a hit
-      this.events = []; // {at, strength}: when a sound left the pot
-      this.grains = Array.from({ length: 14 }, (_, i) => ({ x: (i + 0.5) / 14, h: 0, v: 0 }));
+      howto(el, "Как играть: щёлкните по кастрюле или нажмите «Стукнуть»; «Спеть» звучит, пока держите, — низко, средне или высоко. Меняйте размер миски и смотрите, где крупа прыгает, а где собирается.");
+      this.db = -6; this.volume = Math.pow(10, this.db / 20);
+      this.diameter = 20; // cm
+      this.meter = 0;
+      this.waves = []; // sounds in flight from the pot: {at, strength}
+      this.hits = []; // knocks that reached the film: {at, strength}
+      this.sing = null; // {pitch, strength, from}
+      this.grains = Array.from({ length: 36 }, (_, i) => ({ x: -0.92 + (1.84 * (i + 0.5)) / 36 + (Math.random() - 0.5) * 0.03, y: 0, vy: 0, vx: 0 }));
+      this.ticks = 0; this.tickWindow = 0;
       this.canvas = document.createElement("canvas");
       this.g = this.canvas.getContext("2d");
       const bar = document.createElement("div");
       bar.className = "player-controls";
       bar.innerHTML = '<button type="button" class="player-play" data-a="hit">Стукнуть по кастрюле</button>' +
-        '<button type="button" data-a="sing">Спеть «а-а-а»</button>' +
-        '<label>Громкость <input type="range" min="-40" max="0" step="1" value="-6"> <span class="lab-db">−6</span> дБ</label>';
+        "<b>Спеть:</b>" + SING_PITCHES.map(([n, f]) => `<button type="button" data-sing="${f}">${n}, ${f} Гц</button>`).join("") +
+        '<label>Громкость <input type="range" data-v="db" min="-40" max="0" step="1" value="-6"> <span class="lab-db">−6</span> дБ</label>' +
+        '<label>Миска <input type="range" data-v="d" min="12" max="30" step="1" value="20"> <span class="lab-d">20</span> см</label>' +
+        '<span class="player-score lab-info"></span>';
       el.append(this.canvas, bar);
+      this.info = bar.querySelector(".lab-info");
       bar.querySelector("[data-a=hit]").addEventListener("click", () => this.hit());
-      holdButton(bar.querySelector("[data-a=sing]"), () => this.sing());
-      const vol = bar.querySelector("input");
-      vol.addEventListener("input", () => {
-        this.db = Number(vol.value);
-        this.volume = Math.pow(10, this.db / 20);
+      bar.querySelectorAll("[data-sing]").forEach((b) => holdButton(b, () => this.startSing(Number(b.dataset.sing))));
+      bar.querySelector("[data-v=db]").addEventListener("input", (e) => {
+        this.db = Number(e.target.value); this.volume = Math.pow(10, this.db / 20);
         bar.querySelector(".lab-db").textContent = String(this.db).replace("-", "−");
+      });
+      bar.querySelector("[data-v=d]").addEventListener("input", (e) => {
+        this.diameter = Number(e.target.value); bar.querySelector(".lab-d").textContent = this.diameter; this.describe();
       });
       this.canvas.addEventListener("pointerdown", (ev) => {
         const box = this.canvas.getBoundingClientRect();
@@ -2334,97 +2368,174 @@
       });
       this.resize();
       window.addEventListener("resize", () => this.resize());
-      // animate only while the block is on screen
       if (window.IntersectionObserver) {
-        new IntersectionObserver(([e]) => {
-          this.visible = e.isIntersecting;
-          if (this.visible && !this.looping) { this.looping = true; this.loop(); }
-        }).observe(this.canvas);
-      } else { this.visible = true; this.looping = true; this.loop(); }
+        new IntersectionObserver(([e]) => { this.visible = e.isIntersecting; if (this.visible && !this.looping) this.loop(); }).observe(this.canvas);
+      } else { this.visible = true; this.loop(); }
+      this.describe();
     }
+
+    modeFreqs() { const R = this.diameter / 200; return J0_ZEROS.map((j) => (j * FILM_WAVE) / (2 * Math.PI * R)); }
+    // response of mode n to a sung pitch: a resonance with quality ~8
+    response(f, fn) { const r = f / fn, q = 8; return 1 / Math.sqrt((1 - r * r) ** 2 + (r / q) ** 2); }
+
+    describe(extra) {
+      const fs = this.modeFreqs().map((f) => Math.round(f)).join(", ");
+      this.info.textContent = `Собственные частоты плёнки на миске ${this.diameter} см: ≈ ${fs} Гц.` + (extra ? " " + extra : "");
+    }
+
     resize() {
-      const w = this.el.clientWidth, h = 200;
+      const w = this.el.clientWidth, h = 230;
       const dpr = window.devicePixelRatio || 1;
       this.canvas.width = w * dpr; this.canvas.height = h * dpr; this.canvas.style.height = h + "px";
       this.g.setTransform(dpr, 0, 0, dpr, 0, 0);
       this.w = w; this.h = h;
     }
+
     hit() {
       audio();
       const t = ctx.currentTime, v = this.volume;
       hiss(t, 0.4, 0.25 * v, "bandpass", 3000);
       [523, 1187, 1879, 2790].forEach((f, i) => tone(t, f, 0, 1.2 - i * 0.2, (0.12 * v) / (i + 1)));
-      this.events.push({ at: performance.now(), strength: v });
+      this.waves.push({ at: performance.now(), strength: v, kind: "hit" });
       this.meter = Math.max(this.meter, v);
     }
-    sing() {
-      const stop = holdSing(this.volume);
-      const wave = () => {
-        this.events.push({ at: performance.now(), strength: this.volume * 0.6 });
-        this.meter = Math.max(this.meter, this.volume * 0.6);
-      };
-      wave();
-      const timer = setInterval(wave, 250);
-      return () => { clearInterval(timer); stop(); };
+
+    startSing(pitch) {
+      audio();
+      const stop = holdSing(this.volume, pitch);
+      const sing = { pitch, strength: this.volume, from: performance.now() + 700 };
+      this.sing = sing;
+      const fn = this.modeFreqs(), best = fn.reduce((a, f) => (Math.abs(f - pitch) < Math.abs(a - pitch) ? f : a));
+      this.describe(`Поёте ${pitch} Гц; ближайшая собственная частота — ${Math.round(best)} Гц` +
+        (Math.abs(best - pitch) / pitch < 0.12 ? " — резонанс: плёнка раскачивается сильно." : ". Попробуйте другой размер миски или высоту."));
+      const timer = setInterval(() => { this.waves.push({ at: performance.now(), strength: this.volume * 0.6, kind: "sing" }); this.meter = Math.max(this.meter, this.volume * 0.6); }, 250);
+      this.waves.push({ at: performance.now(), strength: this.volume * 0.6, kind: "sing" });
+      return () => { clearInterval(timer); stop(); if (this.sing === sing) this.sing = null; };
+    }
+
+    // The film's swing (m) and its speed (m/s) at r ∈ [0, 1] of the radius, summed over active excitations.
+    filmAt(r, now) {
+      const fn = this.modeFreqs();
+      let amp = 0, vel = 0, acc = 0;
+      this.hits.forEach((hit) => {
+        const age = (now - hit.at) / 1000;
+        fn.forEach((f, n) => {
+          const a = FILM_AMP * 0.6 * hit.strength * [1, 0.6, 0.4, 0.3][n] * Math.exp(-age / 0.25) * Math.abs(besselJ0(J0_ZEROS[n] * r));
+          const w = 2 * Math.PI * f;
+          amp += a; vel += a * w; acc += a * w * w;
+        });
+      });
+      if (this.sing && now >= this.sing.from) {
+        const w = 2 * Math.PI * this.sing.pitch;
+        const shape = fn.reduce((s, f, n) => s + this.response(this.sing.pitch, f) / 8 * besselJ0(J0_ZEROS[n] * r), 0);
+        const a = FILM_AMP * this.sing.strength * Math.abs(shape);
+        amp += a; vel += a * w; acc += a * w * w;
+      }
+      return { amp, vel, acc };
     }
 
     loop() {
-      const now = performance.now();
-      const travel = 700; // ms on screen for the trip from pot to bowl: slowed down, really ~1 ms
-      this.events.forEach((e) => {
-        if (!e.done && now - e.at >= travel) {
-          e.done = true;
-          this.grains.forEach((gr) => (gr.v = Math.max(gr.v, e.strength * (50 + Math.random() * 40))));
+      this.looping = true;
+      let last = performance.now();
+      const step = () => {
+        if (!this.visible) { this.looping = false; return; }
+        const now = performance.now(), dt = Math.min(0.033, (now - last) / 1000);
+        last = now;
+        this.update(now, dt);
+        this.draw(now);
+        requestAnimationFrame(step);
+      };
+      requestAnimationFrame(step);
+    }
+
+    update(now, dt) {
+      const travel = 700; // ms on screen from pot to bowl: slowed down, really ~1.5 ms for half a metre
+      this.waves = this.waves.filter((wv) => {
+        if (now - wv.at < travel) return true;
+        if (wv.kind === "hit") this.hits.push({ at: now, strength: wv.strength });
+        return false;
+      });
+      this.hits = this.hits.filter((h) => now - h.at < 2000);
+      this.meter *= Math.pow(0.97, dt * 60);
+      const bowlPx = this.bowlW || 300, pxPerM = bowlPx / (this.diameter / 100), gPx = 9.81 * pxPerM;
+      if (now - this.tickWindow > 100) { this.tickWindow = now; this.ticks = 0; }
+      this.grains.forEach((gr) => {
+        if (gr.y <= 0 && gr.vy <= 0) {
+          const f = this.filmAt(Math.abs(gr.x), now);
+          if (f.acc > 9.81) { // the film pulls away faster than gravity: the grain is thrown
+            gr.vy = f.vel * (0.6 + 0.4 * Math.random()) * pxPerM;
+            // drift towards smaller swing: grains wander to the nodal rings
+            const d = 0.02, side = this.filmAt(Math.min(1, Math.abs(gr.x) + d), now).amp - this.filmAt(Math.max(0, Math.abs(gr.x) - d), now).amp;
+            gr.vx = (-Math.sign(side) * Math.sign(gr.x || 1) * 0.15 + (Math.random() - 0.5) * 0.25) * Math.min(1, f.vel / 0.3);
+          } else { gr.vy = 0; gr.vx = 0; gr.y = 0; }
+        }
+        if (gr.vy !== 0 || gr.y > 0) {
+          gr.vy -= gPx * dt;
+          gr.y += gr.vy * dt;
+          gr.x += gr.vx * dt;
+          if (Math.abs(gr.x) > 0.94) { gr.x = Math.sign(gr.x) * 0.94; gr.vx = -gr.vx; }
+          if (gr.y <= 0) { // landing: a tick, louder for a harder fall, a few dozen a second at most
+            const speed = -gr.vy / pxPerM;
+            gr.y = 0; gr.vy = 0;
+            if (speed > 0.05 && this.ticks < 4 && ctx) { this.ticks++; hiss(ctx.currentTime, 0.006, Math.min(0.06, speed * 0.08) * (0.5 + this.volume), "highpass", 5000); }
+          }
         }
       });
-      this.events = this.events.filter((e) => now - e.at < travel + 200);
-      this.grains.forEach((gr) => { gr.h = Math.max(0, gr.h + gr.v * 0.06); gr.v = gr.h > 0 || gr.v > 0 ? gr.v - 9.8 * 0.35 : 0; if (gr.h === 0 && gr.v < 0) gr.v = 0; });
-      this.meter *= 0.97;
-      this.draw(now, travel);
-      if (this.visible) requestAnimationFrame(() => this.loop()); else this.looping = false;
     }
-    draw(now, travel) {
+
+    draw(now) {
       const g = this.g, w = this.w, h = this.h;
       g.fillStyle = COLORS.bg; g.fillRect(0, 0, w, h);
       // pot
-      const px = w * 0.06, pw = w * 0.2, py = h * 0.4, ph = h * 0.36;
+      const px = w * 0.04, pw = w * 0.17, py = h * 0.42, ph = h * 0.34;
       g.fillStyle = "#f6f6f2"; g.strokeStyle = "#555"; g.lineWidth = 2;
       roundRect(g, px, py, pw, ph, 8); g.fill(); g.stroke();
       g.fillStyle = COLORS.text; g.font = "bold 12px Segoe UI, Arial, sans-serif"; g.textAlign = "center";
       g.fillText("кастрюля", px + pw / 2, py + ph / 2 + 4);
-      // level meter, −40 … 0 dB relative to the loudest level of the experiment
-      const mx = px, my = 14, mw = Math.min(w * 0.5, 260), mh = 12;
+      // level meter
+      const mx = px, my = 12, mw = Math.min(w * 0.4, 240), mh = 10;
       const level = this.meter > 0.0001 ? Math.max(-40, 20 * Math.log10(this.meter)) : -40;
       g.fillStyle = "#e9e9e2"; roundRect(g, mx, my, mw, mh, 3); g.fill();
-      g.fillStyle = level > -6 ? COLORS.bad : COLORS.right;
-      roundRect(g, mx, my, Math.max(2, mw * (level + 40) / 40), mh, 3); g.fill();
-      g.fillStyle = COLORS.muted; g.font = "10px Segoe UI, Arial, sans-serif"; g.textAlign = "center";
-      [-40, -30, -20, -10, 0].forEach((d) => g.fillText(String(d).replace("-", "−"), mx + mw * (d + 40) / 40, my + mh + 11));
+      g.fillStyle = level > -6 ? COLORS.bad : COLORS.right; roundRect(g, mx, my, Math.max(2, (mw * (level + 40)) / 40), mh, 3); g.fill();
+      g.fillStyle = COLORS.muted; g.font = "10px Segoe UI, Arial, sans-serif";
+      [-40, -20, 0].forEach((d) => g.fillText(String(d).replace("-", "−"), mx + (mw * (d + 40)) / 40, my + mh + 11));
       g.textAlign = "left"; g.fillStyle = COLORS.text; g.font = "bold 11px Segoe UI, Arial, sans-serif";
-      g.fillText(`уровень: ${level <= -40 ? "тишина" : Math.round(level).toString().replace("-", "−") + " дБ"}`, mx + mw + 10, my + 10);
-      // waves in flight
-      const bx0 = w * 0.62, bx1 = w * 0.94, film = h * 0.55;
-      this.events.forEach((e) => {
-        const k = (now - e.at) / travel;
+      g.fillText(`уровень: ${level <= -40 ? "тишина" : Math.round(level).toString().replace("-", "−") + " дБ"}`, mx + mw + 10, my + 9);
+      // bowl sized by its diameter
+      const maxW = w * 0.5, bw = (maxW * this.diameter) / 30, cx = w * 0.7, bx0 = cx - bw / 2, bx1 = cx + bw / 2, film = h * 0.56;
+      this.bowlW = bw;
+      const travel = 700;
+      this.waves.forEach((wv) => {
+        const k = (now - wv.at) / travel;
         if (k < 0 || k > 1) return;
         const x = px + pw + k * (bx0 - px - pw);
-        g.strokeStyle = COLORS.right; g.globalAlpha = 0.3 + 0.7 * e.strength; g.lineWidth = 2.5;
+        g.strokeStyle = COLORS.right; g.globalAlpha = 0.3 + 0.7 * wv.strength; g.lineWidth = 2.5;
         g.beginPath(); g.arc(x - 30, h * 0.55, 34, -0.7, 0.7); g.stroke(); g.globalAlpha = 1;
       });
-      // bowl, film and grains
       g.fillStyle = "#f6f6f2"; g.strokeStyle = "#555"; g.lineWidth = 2;
-      g.beginPath(); g.moveTo(bx0, film); g.quadraticCurveTo(bx0, h * 0.9, (bx0 + bx1) / 2, h * 0.9);
-      g.quadraticCurveTo(bx1, h * 0.9, bx1, film); g.closePath(); g.fill(); g.stroke();
-      g.strokeStyle = COLORS.right; g.lineWidth = 3;
-      g.beginPath(); g.moveTo(bx0 - 6, film); g.lineTo(bx1 + 6, film); g.stroke();
-      g.fillStyle = COLORS.right;
-      this.grains.forEach((gr) => { g.beginPath(); g.arc(bx0 + gr.x * (bx1 - bx0), film - 4 - gr.h, 3, 0, Math.PI * 2); g.fill(); });
+      g.beginPath(); g.moveTo(bx0, film); g.quadraticCurveTo(bx0, h * 0.9, cx, h * 0.9); g.quadraticCurveTo(bx1, h * 0.9, bx1, film); g.closePath(); g.fill(); g.stroke();
+      // the film: its swing magnified and slowed down so the rings are visible
+      const shown = (x) => {
+        const r = Math.abs(x), fn = this.modeFreqs(), tt = now / 1000;
+        let u = 0;
+        this.hits.forEach((hit) => fn.forEach((f, n) => {
+          u += hit.strength * [1, 0.6, 0.4, 0.3][n] * Math.exp(-(now - hit.at) / 250) * besselJ0(J0_ZEROS[n] * r) * Math.sin(2 * Math.PI * (0.8 + n * 0.5) * tt);
+        }));
+        if (this.sing && now >= this.sing.from) u += this.sing.strength * fn.reduce((s, f, n) => s + this.response(this.sing.pitch, f) / 8 * besselJ0(J0_ZEROS[n] * r), 0) * Math.sin(2 * Math.PI * 1.2 * tt);
+        return u * 12;
+      };
+      g.strokeStyle = COLORS.right; g.lineWidth = 3; g.beginPath();
+      for (let i = 0; i <= 120; i++) { const x = -1 + (2 * i) / 120; g.lineTo(cx + (x * bw) / 2, film + shown(x)); }
+      g.stroke();
+      g.fillStyle = "#8a5a2b";
+      this.grains.forEach((gr) => { g.beginPath(); g.arc(cx + (gr.x * bw) / 2, film - 3 + shown(gr.x) * (gr.y > 0 ? 0 : 1) - gr.y, 2.6, 0, Math.PI * 2); g.fill(); });
       g.fillStyle = COLORS.muted; g.font = "11px Segoe UI, Arial, sans-serif"; g.textAlign = "center";
-      g.fillText("миска с плёнкой и крупой", (bx0 + bx1) / 2, h - 6);
-      g.textAlign = "left";
+      g.fillText(`миска ${this.diameter} см с плёнкой и крупой`, cx, h - 6);
+      g.textAlign = "left"; g.font = "10px Segoe UI, Arial, sans-serif";
+      g.fillText("плёнка показана увеличенной и замедленной (на деле — доли миллиметра, сотни раз в секунду),", 8, 44);
+      g.fillText("волна до миски — тоже замедленно; крупа прыгает в настоящем времени", 8, 57);
     }
   }
-
 
   // ---------- synthesizer (4.2): oscillator → filter → amplifier, driven by an envelope and an LFO ----------
   // data-stages picks the blocks shown: "osc", "filter", "env", "lfo", or several, comma-separated.

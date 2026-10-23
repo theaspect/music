@@ -802,7 +802,7 @@
   }
 
   // Brackets under the white keys of each octave, labelled with its Russian name (как на схеме клавиатуры в 1.2).
-  const OCTAVE_NAMES = ["", "контроктава", "большая октава", "малая октава", "первая октава", "вторая октава", "третья октава", "четвёртая октава", "пятая октава"];
+  const OCTAVE_NAMES = ["субконтроктава", "контроктава", "большая октава", "малая октава", "первая октава", "вторая октава", "третья октава", "четвёртая октава", "пятая октава"];
   function octaveBrackets(g, keys, lo, hi, y) {
     for (let o = Math.floor(lo / 12); o <= Math.floor(hi / 12); o++) {
       const whites = [];
@@ -891,11 +891,29 @@
       bar.className = "player-controls";
       bar.innerHTML =
         '<button type="button" class="player-play">Щёлкнуть</button>' +
+        '<button type="button" data-scale="1">▶ Ноты по очереди</button>' +
         '<span class="player-mode">' + Object.entries(RULER_MATERIALS).map(([k, m], i) =>
           `<button type="button" data-mat="${k}"${i === 0 ? ' class="on"' : ""}>${m.name}</button>`).join("") + "</span>" +
         '<span class="player-score lab-info"></span>';
       el.append(this.canvas, bar);
       this.info = bar.querySelector(".lab-info");
+      // the scale from the nearest до below the current pitch, the ruler sliding to each note by itself
+      bar.querySelector("[data-scale]").addEventListener("click", () => {
+        audio();
+        clearTimeout(this.scaleTimer);
+        const K = this.mat.K, swing = rulerFreq(this.free, K) >= 20;
+        const notes = rulerNotes(K).filter((n) => (rulerFreq(n.cm, K) >= 20) === swing).sort((a, b) => a.m - b.m);
+        const now = Math.round(69 + 12 * Math.log2(rulerHeard(this.free, K) / 440));
+        const dos = notes.filter((n) => n.m % 12 === 0 && n.m <= now);
+        const from = dos.length ? dos[dos.length - 1].m : notes.length ? notes[0].m : null;
+        const run = notes.filter((n) => from !== null && n.m >= from && n.m <= from + 12);
+        const step = (i) => {
+          if (i >= run.length) return;
+          this.free = run[i].cm; this.pluckedAt = null; this.update(); this.pluck();
+          this.scaleTimer = setTimeout(() => step(i + 1), 700);
+        };
+        step(0);
+      });
       bar.querySelectorAll("[data-mat]").forEach((b) => b.addEventListener("click", () => {
         bar.querySelectorAll("[data-mat]").forEach((x) => x.classList.toggle("on", x === b));
         this.mat = RULER_MATERIALS[b.dataset.mat];
@@ -935,7 +953,7 @@
     freq() { return rulerFreq(this.free, this.mat.K); }
 
     resize() {
-      const w = this.el.clientWidth, sceneH = Math.round(Math.min(260, w * 0.45)), h = sceneH + 140;
+      const w = this.el.clientWidth, sceneH = Math.round(Math.min(260, w * 0.45)), h = sceneH + 240;
       const dpr = window.devicePixelRatio || 1;
       this.canvas.width = w * dpr; this.canvas.height = h * dpr; this.canvas.style.height = h + "px";
       this.g.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -1065,6 +1083,34 @@
           g.fillText("до", x, h - 32);
         }
       });
+      // octaves as brackets above the ticks: each is shorter than the previous, though not by half as on a string
+      // (a ruler's pitch grows as 1/L², so one octave up is a √2 ≈ 1.41 times shorter length)
+      const K = this.mat.K, Lhum = Math.sqrt(K / 20) * 100;
+      const groups = {};
+      rulerNotes(K).forEach(({ cm: L, m }) => {
+        const key = `${rulerFreq(L, K) >= 20 ? "s" : "h"}${Math.floor(m / 12)}`;
+        (groups[key] = groups[key] || []).push(L);
+      });
+      Object.entries(groups).forEach(([key, Ls]) => {
+        if (Ls.length < 2) return;
+        const xa = edge + Math.min(...Ls) * cm + 2, xb = edge + Math.max(...Ls) * cm - 2, y = h - 44;
+        if (xb - xa < 8) return;
+        g.strokeStyle = "#b8b8ae"; g.lineWidth = 1.2;
+        g.beginPath(); g.moveTo(xa, y + 4); g.lineTo(xa, y); g.lineTo(xb, y); g.lineTo(xb, y + 4); g.stroke();
+        const name = (OCTAVE_NAMES[Number(key.slice(1)) - 1] || "").replace(" октава", "");
+        g.fillStyle = COLORS.muted; g.font = "9px Segoe UI, Arial, sans-serif"; g.textAlign = "center";
+        const short = { "субконтроктава": "субк.", "контроктава": "контр.", "большая": "бол.", "малая": "мал.", "первая": "1-я",
+                        "вторая": "2-я", "третья": "3-я", "четвёртая": "4-я", "пятая": "5-я" }[name] || name;
+        g.fillText(xb - xa > 60 ? name : short, (xa + xb) / 2, y - 3);
+      });
+      if (Lhum > 3 && Lhum < 28) {
+        const xb = edge + Lhum * cm;
+        g.strokeStyle = COLORS.bad; g.lineWidth = 1; g.setLineDash([3, 3]);
+        g.beginPath(); g.moveTo(xb, h - 70); g.lineTo(xb, h - 16); g.stroke(); g.setLineDash([]);
+        g.fillStyle = COLORS.bad; g.font = "10px Segoe UI, Arial, sans-serif";
+        g.textAlign = "right"; g.fillText("слышно качание ←", xb - 4, h - 62);
+        g.textAlign = "left"; g.fillText("→ слышен гул 2-го изгиба", xb + 4, h - 62);
+      }
       g.fillStyle = COLORS.text; g.font = "bold 12px Segoe UI, Arial, sans-serif"; g.textAlign = "center";
       const note = nearestNote(rulerHeard(this.free, this.mat.K));
       g.fillText(`${cmText(this.free)} см свободно — ${note}`, edge + freeLen / 2, h - 2);
@@ -1106,6 +1152,23 @@
       g.fillStyle = COLORS.muted; g.font = "11px Segoe UI, Arial, sans-serif"; g.textAlign = "left";
       g.fillText("красные точки не двигаются. Дальше — 4-й изгиб в 34,4 раза чаще, 5-й в 56,8… Числа нецелые, поэтому линейка", 12, top + 110);
       g.fillText("не звучит чистой нотой, а гудит и дребезжит; у струны такие колебания идут ровно в 2, 3, 4 раза чаще. Показано замедленно.", 12, top + 124);
+      // the sum: how the tip really moves — the three modes at once, each with its own (illustrative) size
+      const y0 = top + 190, x0 = 12, len = w - 24, amps = [[1, 26, "#7eaee6"], [6.27, 9, "#e0892b"], [17.55, 4, "#8e44ad"]];
+      g.fillStyle = COLORS.text; g.font = "bold 12px Segoe UI, Arial, sans-serif"; g.textAlign = "left";
+      g.fillText("Сумма: как движется кончик линейки во времени", x0, top + 148);
+      g.strokeStyle = "#e4e4dc"; g.lineWidth = 1; g.beginPath(); g.moveTo(x0, y0); g.lineTo(x0 + len, y0); g.stroke();
+      const periods = 2, shift = now * 0.25; // two periods of the swing, scrolling slowly
+      const part = (k, a, x) => a * Math.sin(2 * Math.PI * k * (periods * x / len + shift));
+      amps.forEach(([k, a, color]) => {
+        g.strokeStyle = color; g.lineWidth = 1.2; g.beginPath();
+        for (let x = 0; x <= len; x += 1) g.lineTo(x0 + x, y0 - part(k, a, x));
+        g.stroke();
+      });
+      g.strokeStyle = this.mat.color === "#7d8793" ? "#333" : COLORS.text; g.lineWidth = 2.5; g.beginPath();
+      for (let x = 0; x <= len; x += 1) g.lineTo(x0 + x, y0 - amps.reduce((s, [k, a]) => s + part(k, a, x), 0));
+      g.stroke();
+      g.fillStyle = COLORS.muted; g.font = "11px Segoe UI, Arial, sans-serif";
+      g.fillText("тонкие линии — 1-й, 2-й и 3-й изгибы по отдельности (размеры условные), толстая — их сумма: так кончик и движется, и такой звук мы слышим", x0, top + 234);
     }
   }
 
@@ -1709,6 +1772,7 @@
       bar.innerHTML = '<span class="player-mode"><button type="button" data-o="1" class="on">1-я октава</button><button type="button" data-o="2">2-я октава</button></span>' +
         STRING_MARKS.map(([, name], i) => `<button type="button" data-mark="${i}"${i === 12 ? ' title="до следующей октавы"' : ""}>${i === 12 ? "до ↑" : name}</button>`).join("") +
         '<label>Натяжение <input type="range" min="50" max="200" step="5" value="100"> <span class="lab-ten">100</span> %</label>' +
+        '<button type="button" class="player-play" data-scale="1">▶ Гамма по очереди</button>' +
         '<span class="player-mode"><button type="button" data-t="just" class="on">Чистый строй</button><button type="button" data-t="equal">Как на фортепиано</button></span>' +
         '<span class="player-score lab-info"></span>';
       el.append(this.canvas, bar);
@@ -1723,6 +1787,19 @@
         if (semis !== null) this.part = this.marks().find((m) => m[5] === semis)[0]; // the finger follows its note
         this.update();
       }));
+      // the scale до … до of the chosen octave, the finger stepping along the marks of the current tuning
+      bar.querySelector("[data-scale]").addEventListener("click", () => {
+        audio();
+        clearTimeout(this.scaleTimer);
+        const white = [0, 2, 4, 5, 7, 9, 11, 12];
+        const step = (i) => {
+          if (i >= white.length) return;
+          this.part = this.marks()[white[i]][0] / this.octave;
+          this.pluck();
+          this.scaleTimer = setTimeout(() => step(i + 1), 450);
+        };
+        step(0);
+      });
       this.octave = 1; // which octave the note buttons put the finger in
       bar.querySelectorAll("[data-o]").forEach((b) => b.addEventListener("click", () => {
         bar.querySelectorAll("[data-o]").forEach((x) => x.classList.toggle("on", x === b));
@@ -1739,7 +1816,7 @@
       const presses = new Map(); // pointerId → press: one finger can hold the finger-dot while another plucks
       const posAt = (ev) => (ev.clientX - this.canvas.getBoundingClientRect().left - this.x0) / this.len;
       const setFinger = (pos) => {
-        let part = Math.max(0.25, Math.min(1, 1 - pos));
+        let part = Math.max(0.125, Math.min(1, 1 - pos));
         const snap = this.marks().find(([share]) => Math.abs(share - part) < (share < 0.5 ? 0.005 : 0.008));
         if (snap) part = snap[0];
         this.part = part;
@@ -1853,7 +1930,13 @@
         g.fillText(frac, x + (share === 1 ? 10 : 0), sharp ? labelY - 12 : labelY + 13);
       });
       // the two octaves of marks, as brackets under the labels
-      [[0, 0.5, "1-я октава: от всей струны до половины"], [0.5, 0.75, "2-я октава: от половины до четверти"]].forEach(([a, b, label]) => {
+      // the third octave, 1/4 … 1/8: only ticks — enough to see that every octave is half as long as the previous one
+      STRING_MARKS.slice(1).forEach(([share]) => {
+        const x = x0 + len * (1 - share / 4);
+        g.strokeStyle = "#cfcfc6"; g.lineWidth = 1;
+        g.beginPath(); g.moveTo(x, y0 - 8); g.lineTo(x, y0 + 8); g.stroke();
+      });
+      [[0, 0.5, "1-я октава: от всей струны до половины"], [0.5, 0.75, "2-я: до четверти"], [0.75, 0.875, "3-я"]].forEach(([a, b, label]) => {
         const xa = x0 + len * a + 2, xb = x0 + len * b - 2, y = y0 + 106;
         g.strokeStyle = "#b8b8ae"; g.lineWidth = 1.2;
         g.beginPath(); g.moveTo(xa, y - 5); g.lineTo(xa, y); g.lineTo(xb, y); g.lineTo(xb, y - 5); g.stroke();
@@ -1926,7 +2009,8 @@
       bar.className = "player-controls";
       bar.innerHTML = '<span class="player-mode"><button type="button" data-m="tap" class="on">Стучать ложкой</button><button type="button" data-m="blow">Дуть</button></span>' +
         '<button type="button" data-organ="1">Настроить как орган: до ре ми фа соль ля си до</button>' +
-        '<button type="button" data-reset="1">Вернуть как было</button><span class="player-score lab-info"></span>';
+        '<button type="button" data-reset="1">Вернуть как было</button>' +
+        '<button type="button" class="player-play" data-scale="1">▶ По очереди</button><span class="player-score lab-info"></span>';
       el.append(this.canvas, bar);
       this.info = bar.querySelector(".lab-info");
       bar.querySelectorAll("[data-m]").forEach((b) => b.addEventListener("click", () => {
@@ -1942,6 +2026,18 @@
                                 : " (при стуке на октаву выше — от до второй октавы). Чем выше нота, тем меньше воды.") +
           " Настройка — для текущего режима: в другом бутылки зазвучат иначе.";
         this.draw();
+      });
+      // every bottle in turn, left to right: knocked, or blown for a moment
+      bar.querySelector("[data-scale]").addEventListener("click", () => {
+        audio();
+        clearTimeout(this.scaleTimer);
+        const step = (i) => {
+          if (i >= this.levels.length) return;
+          if (this.mode === "tap") this.sound(i);
+          else { const stop = this.blow(i); setTimeout(stop, 380); }
+          this.scaleTimer = setTimeout(() => step(i + 1), 450);
+        };
+        step(0);
       });
       bar.querySelector("[data-reset]").addEventListener("click", () => {
         this.levels = [...BOTTLES_START];
@@ -2041,7 +2137,7 @@
           const y = top + bh * (1 - L), isDo = m % 12 === 0;
           g.strokeStyle = isDo ? COLORS.right : "#9aa1ad"; g.lineWidth = isDo ? 2 : 1;
           g.beginPath(); g.moveTo(x + bw - (isDo ? 12 : 7), y); g.lineTo(x + bw, y); g.stroke();
-          if (isDo) { g.fillStyle = COLORS.right; g.font = "bold 9px Segoe UI, Arial, sans-serif"; g.textAlign = "left"; g.fillText("до", x + bw + 2, y + 3); }
+          if (isDo) { g.fillStyle = COLORS.right; g.font = "bold 9px Segoe UI, Arial, sans-serif"; g.textAlign = "left"; g.fillText("до" + "₀₁₂₃₄₅₆₇₈"[Math.floor(m / 12) - 1], x + bw + 2, y + 3); }
         });
         g.strokeStyle = COLORS.right; g.lineWidth = 2;
         g.beginPath();
